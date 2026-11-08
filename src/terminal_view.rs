@@ -16,6 +16,7 @@ use alacritty_terminal::{
 use gpui::{prelude::*, *};
 use std::{ops::Range, sync::atomic::Ordering, time::Duration};
 
+mod file_drop;
 mod scroll;
 use scroll::ScrollLines;
 
@@ -255,6 +256,38 @@ impl TerminalView {
         }
     }
 
+    fn drop_files(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(s) = self.session.as_ref().filter(|_| !self.exited) else {
+            return;
+        };
+        let text = file_drop::paths_text(paths.paths(), &self.profile);
+        if text.is_empty() {
+            return;
+        }
+        let bracketed = s.terminal.lock().mode().contains(TermMode::BRACKETED_PASTE);
+        s.input(keys::paste(&format!("{text} "), bracketed));
+        self.selecting = false;
+        self.cursor_on = true;
+        self.focus.focus(window, cx);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    fn file_drag_move(
+        &mut self,
+        event: &DragMoveEvent<ExternalPaths>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.selecting = false;
+        // This GPUI revision translates FileDrop to mouse events only after
+        // updating input modality. A drop after typing otherwise fails its
+        // hover test. Feed the translated move through modality tracking once.
+        if window.last_input_was_keyboard() {
+            window.dispatch_event(PlatformInput::MouseMove(event.event.clone()), cx);
+        }
+    }
+
     pub fn search(&mut self, text: &str, backwards: bool, advance: bool, cx: &mut Context<Self>) {
         self.search_result.clear();
         if text.is_empty() {
@@ -423,6 +456,9 @@ impl TerminalView {
         cx.notify();
     }
     fn mouse_move(&mut self, e: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if cx.has_active_drag() {
+            return;
+        }
         let Some(s) = &self.session else {
             return;
         };
@@ -460,7 +496,11 @@ impl TerminalView {
         }
         self.last_mouse = Some((col, row));
     }
-    fn mouse_up(&mut self, e: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+    fn mouse_up(&mut self, e: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if cx.has_active_drag() {
+            self.selecting = false;
+            return;
+        }
         if !self.selecting
             && let Some(s) = &self.session
             && s.terminal.lock().mode().intersects(TermMode::MOUSE_MODE)
@@ -893,6 +933,8 @@ impl Render for TerminalView {
             .overflow_hidden()
             .bg(Theme::new(self.settings.theme == "light").terminal_bg())
             .on_key_down(cx.listener(Self::key))
+            .on_drag_move(cx.listener(Self::file_drag_move))
+            .on_drop(cx.listener(Self::drop_files))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::mouse_down))

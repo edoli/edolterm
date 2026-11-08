@@ -96,16 +96,19 @@ impl TerminalApp {
             cx.new(|cx| TextField::new(settings.font_family.clone(), "고정폭 글꼴 이름", cx));
         let history_input =
             cx.new(|cx| TextField::new(settings.scrollback.to_string(), "10000", cx));
-        let subscriptions = vec![cx.subscribe_in(
-            &search,
-            window,
-            |this, _, e: &FieldEvent, window, cx| match e {
-                FieldEvent::Changed if this.search_visible => this.find(false, false, cx),
-                FieldEvent::Changed => {}
-                FieldEvent::Submit => this.find(false, true, cx),
-                FieldEvent::Cancel => this.hide_search(window, cx),
-            },
-        )];
+        let subscriptions = vec![
+            cx.subscribe_in(
+                &search,
+                window,
+                |this, _, e: &FieldEvent, window, cx| match e {
+                    FieldEvent::Changed if this.search_visible => this.find(false, false, cx),
+                    FieldEvent::Changed => {}
+                    FieldEvent::Submit => this.find(false, true, cx),
+                    FieldEvent::Cancel => this.hide_search(window, cx),
+                },
+            ),
+            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+        ];
         let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
         let mut this = Self {
             dir,
@@ -1084,6 +1087,11 @@ fn setting(label: &'static str, description: &'static str, control: impl IntoEle
 
 fn window_controls(window: &Window, theme: Theme) -> AnyElement {
     let maximized = window.is_maximized();
+    let foreground = if window.is_window_active() {
+        theme.fg
+    } else {
+        theme.fg.opacity(0.4)
+    };
     let button = |id, area, symbol, label: &'static str| {
         div()
             .id(id)
@@ -1099,12 +1107,12 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
             .font_family("Segoe MDL2 Assets")
             .text_size(px(10.))
             .line_height(px(10.))
-            .text_color(theme.fg)
+            .text_color(foreground)
             .hover(move |s| {
                 if area == WindowControlArea::Close {
                     s.bg(rgb(0xc42b1c)).text_color(rgb(0xffffff))
                 } else {
-                    s.bg(theme.hover)
+                    s.bg(theme.hover).text_color(theme.fg)
                 }
             })
             .child(symbol)
