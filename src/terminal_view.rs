@@ -536,7 +536,7 @@ impl TerminalView {
         let run = TextRun {
             len: 1,
             font: font.clone(),
-            color: theme.fg,
+            color: theme.terminal_fg(),
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -606,7 +606,7 @@ impl TerminalView {
                 std::mem::swap(&mut fg, &mut bg);
             }
             if selection.is_some_and(|s| s.contains(p)) {
-                bg = theme.selection;
+                bg = theme.terminal_selection();
             }
             if self.search_match.as_ref().is_some_and(|r| r.contains(&p)) {
                 bg = rgb(0x886629).into();
@@ -616,7 +616,7 @@ impl TerminalView {
                 fg = fg.opacity(0.6);
             }
             let rect = Bounds::new(pos, gpui::size(px(self.cell_width), px(self.cell_height)));
-            if bg != theme.bg {
+            if bg != theme.terminal_bg() {
                 frame.quads.push(fill(rect, bg));
             }
             if cell.flags.intersects(
@@ -647,7 +647,7 @@ impl TerminalView {
                         bounds.size.height = px(1.);
                     }
                     _ => {
-                        fg = theme.bg;
+                        fg = theme.terminal_bg();
                     }
                 }
                 frame.quads.push(fill(bounds, theme.indexed(258, &colors)));
@@ -704,7 +704,7 @@ impl TerminalView {
             let run = TextRun {
                 len: self.preedit.len(),
                 font,
-                color: theme.fg,
+                color: theme.terminal_fg(),
                 background_color: Some(theme.panel),
                 underline: Some(UnderlineStyle {
                     color: Some(theme.accent),
@@ -857,7 +857,7 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .cursor_text()
             .overflow_hidden()
-            .bg(Theme::new(self.settings.theme == "light").bg)
+            .bg(Theme::new(self.settings.theme == "light").terminal_bg())
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(MouseButton::Middle, cx.listener(Self::mouse_down))

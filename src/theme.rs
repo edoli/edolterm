@@ -4,6 +4,12 @@ use alacritty_terminal::{
 };
 use gpui::{Hsla, rgb};
 
+// Windows Terminal's Campbell scheme, in ANSI order (not Windows console order).
+const CAMPBELL: [usize; 16] = [
+    0x0c0c0c, 0xc50f1f, 0x13a10e, 0xc19c00, 0x0037da, 0x881798, 0x3a96dd, 0xcccccc, 0x767676,
+    0xe74856, 0x16c60c, 0xf9f1a5, 0x3b78ff, 0xb4009e, 0x61d6d6, 0xf2f2f2,
+];
+
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub bg: Hsla,
@@ -14,8 +20,6 @@ pub struct Theme {
     pub muted: Hsla,
     pub hover: Hsla,
     pub accent: Hsla,
-    pub selection: Hsla,
-    pub light: bool,
 }
 impl Theme {
     pub fn new(light: bool) -> Self {
@@ -29,23 +33,29 @@ impl Theme {
                 muted: rgb(0x5d6572).into(),
                 hover: rgb(0xdce0e7).into(),
                 accent: rgb(0x3469bc).into(),
-                selection: rgb(0xc5d9fa).into(),
-                light,
             }
         } else {
             Self {
-                bg: rgb(0x101215).into(),
-                fg: rgb(0xd9dce3).into(),
-                bar: rgb(0x202329).into(),
-                panel: rgb(0x262a32).into(),
-                border: rgb(0x343942).into(),
-                muted: rgb(0x929baa).into(),
-                hover: rgb(0x343b47).into(),
+                bg: rgb(0x0c0c0c).into(),
+                fg: rgb(0xcccccc).into(),
+                bar: rgb(0x2b2b2b).into(),
+                panel: rgb(0x2c2c2c).into(),
+                border: rgb(0x404040).into(),
+                muted: rgb(0xb0b0b0).into(),
+                hover: rgb(0x3c3c3c).into(),
                 accent: rgb(0x85b6ff).into(),
-                selection: rgb(0x334d71).into(),
-                light,
             }
         }
+    }
+    // The terminal scheme is independent of the application's light/dark chrome.
+    pub fn terminal_bg(self) -> Hsla {
+        rgb(0x0c0c0c).into()
+    }
+    pub fn terminal_fg(self) -> Hsla {
+        rgb(0xcccccc).into()
+    }
+    pub fn terminal_selection(self) -> Hsla {
+        rgb(0x404040).into()
     }
     pub fn color(&self, color: Color, overrides: &Colors, bold: bool) -> Hsla {
         match color {
@@ -72,12 +82,8 @@ impl Theme {
         {
             return c;
         }
-        let ansi = [
-            0x15191f, 0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2, 0xc8ccd4,
-            0x6b7482, 0xff858f, 0xb1e18b, 0xffda8a, 0x85b6ff, 0xdda0f4, 0x79d6dc, 0xffffff,
-        ];
         let value = match i {
-            0..=15 => ansi[i],
+            0..=15 => CAMPBELL[i],
             16..=231 => {
                 let n = i - 16;
                 let scale = |c: usize| if c == 0 { 0 } else { 55 + c * 40 };
@@ -87,31 +93,15 @@ impl Theme {
                 let v = 8 + (i - 232) * 10;
                 (v << 16) | (v << 8) | v
             }
-            257 => {
-                if self.light {
-                    0xfafafa
-                } else {
-                    0x101215
-                }
-            }
-            258 => {
-                if self.light {
-                    0x3469bc
-                } else {
-                    0x85b6ff
-                }
-            }
+            257 => 0x0c0c0c,
+            258 => 0xffffff,
             259..=266 => {
-                let v = ansi[i - 259];
+                let v = CAMPBELL[i - 259];
                 (((v >> 16 & 255) / 2) << 16) | (((v >> 8 & 255) / 2) << 8) | ((v & 255) / 2)
             }
-            _ => {
-                if self.light {
-                    0x202124
-                } else {
-                    0xd9dce3
-                }
-            }
+            267 => 0xf2f2f2,
+            268 => 0x666666,
+            _ => 0xcccccc,
         };
         Rgb {
             r: (value >> 16) as u8,

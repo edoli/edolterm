@@ -1,5 +1,6 @@
 use crate::{
     config::{self, Profile, SavedSession, SavedTab, Settings},
+    icons::{self, Icon, icon},
     platform,
     terminal_view::{TerminalEvent, TerminalView},
     text_field::{FieldEvent, TextField},
@@ -555,8 +556,7 @@ impl TerminalApp {
         }
     }
 
-    fn tabs_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::new(self.settings.theme == "light");
+    fn tab_dimensions(&self, window: &Window) -> (f32, f32, f32) {
         let controls = cfg!(windows) && !window.is_fullscreen();
         let left = if cfg!(target_os = "macos") { 78. } else { 0. };
         let viewport = (f32::from(window.viewport_size().width)
@@ -565,7 +565,19 @@ impl TerminalApp {
             - left
             - if controls { 138. } else { 0. })
         .max(1.);
-        let tab_width = (viewport / self.tabs.len().max(1) as f32).max(100.);
+        let tab_width = (viewport / self.tabs.len().max(1) as f32).clamp(100., 240.);
+        (
+            viewport,
+            tab_width,
+            (tab_width * self.tabs.len() as f32).min(viewport),
+        )
+    }
+
+    fn tabs_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::new(self.settings.theme == "light");
+        let controls = cfg!(windows) && !window.is_fullscreen();
+        let left = if cfg!(target_os = "macos") { 78. } else { 0. };
+        let (viewport, tab_width, tabs_extent) = self.tab_dimensions(window);
         let mut strip = div()
             .id("tab-strip")
             .flex()
@@ -594,17 +606,9 @@ impl TerminalApp {
             let active = index == self.active;
             let (title, icon, bell) = if let Some(t) = &tab.terminal {
                 let t = t.read(cx);
-                (
-                    t.title.clone(),
-                    if t.profile.id.starts_with("wsl:") {
-                        "›_"
-                    } else {
-                        ">_"
-                    },
-                    t.bell,
-                )
+                (t.title.clone(), Icon::Terminal, t.bell)
             } else {
-                ("설정".into(), "⚙", false)
+                ("설정".into(), Icon::Settings, false)
             };
             let tooltip = title.clone();
             strip = strip.child(
@@ -647,8 +651,12 @@ impl TerminalApp {
                             } else {
                                 theme.accent
                             })
-                            .text_size(px(12.))
-                            .child(icon),
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .size(px(16.))
+                            .flex_shrink_0()
+                            .child(icons::icon(icon, 16.)),
                     )
                     .child(
                         div()
@@ -671,7 +679,7 @@ impl TerminalApp {
                             .flex_shrink_0()
                             .rounded_sm()
                             .hover(|s| s.bg(theme.hover))
-                            .child("×")
+                            .child(icons::icon(Icon::Close, 14.))
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.close_tab(id, window, cx);
@@ -702,19 +710,20 @@ impl TerminalApp {
         let max_scroll = (total - viewport).max(1.);
         let thumb_left = (-f32::from(self.tab_scroll.offset().x) / max_scroll).clamp(0., 1.)
             * (viewport - thumb_width);
+        let active = self.active;
+        let scroll = self.tab_scroll.clone();
         div()
+            .relative()
             .flex()
             .items_center()
             .h(px(36.))
             .flex_shrink_0()
             .bg(theme.bar)
-            .border_b_1()
-            .border_color(theme.border)
             .when(left > 0., |d| d.child(div().w(px(left)).h_full()))
             .child(
                 div()
                     .relative()
-                    .w(px(viewport))
+                    .w(px(tabs_extent))
                     .h_full()
                     .min_w_0()
                     .overflow_hidden()
@@ -778,18 +787,18 @@ impl TerminalApp {
                     }),
             )
             .child(
-                button("new-tab", "+", theme)
+                icon_button("new-tab", Icon::Plus, "새 탭", theme)
                     .w(px(40.))
                     .h_full()
-                    .text_size(px(21.))
+                    .bg(theme.bar)
                     .tooltip(tip("새 탭 · Ctrl+Shift+T".into()))
                     .on_click(cx.listener(|this, _, window, cx| this.new_default(window, cx))),
             )
             .child(
-                button("profiles", "⌄", theme)
+                icon_button("profiles", Icon::ChevronDown, "프로필 및 설정", theme)
                     .w(px(40.))
                     .h_full()
-                    .text_size(px(19.))
+                    .bg(theme.bar)
                     .tooltip(tip("프로필 및 설정 · Ctrl+Shift+P".into()))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.menu = !this.menu;
@@ -800,22 +809,65 @@ impl TerminalApp {
             )
             .child(
                 div()
-                    .w(px(28.))
+                    .flex_1()
+                    .min_w(px(28.))
                     .h_full()
                     .flex_shrink_0()
                     .window_control_area(WindowControlArea::Drag),
             )
             .when(controls, |d| d.child(window_controls(window, theme)))
+            // Paint the divider after layout, leaving a gap under the active tab.
+            // Read the scroll offset in prepaint so tab reveal/scroll stays aligned.
+            .child(
+                canvas(
+                    move |_, _, _| {
+                        let offset = f32::from(scroll.offset().x);
+                        let start = (left + active as f32 * tab_width + offset)
+                            .clamp(left, left + tabs_extent);
+                        let end = (left + (active + 1) as f32 * tab_width + offset)
+                            .clamp(left, left + tabs_extent);
+                        (start, end)
+                    },
+                    move |bounds, (start, end), window, _| {
+                        let y = bounds.bottom() - px(1.);
+                        if start > 0. {
+                            window.paint_quad(fill(
+                                Bounds::new(point(bounds.left(), y), size(px(start), px(1.))),
+                                theme.border,
+                            ));
+                        }
+                        let remaining = f32::from(bounds.size.width) - end;
+                        if remaining > 0. {
+                            window.paint_quad(fill(
+                                Bounds::new(
+                                    point(bounds.left() + px(end), y),
+                                    size(px(remaining), px(1.)),
+                                ),
+                                theme.border,
+                            ));
+                        }
+                    },
+                )
+                .absolute()
+                .left_0()
+                .top_0()
+                .size_full(),
+            )
             .into_any_element()
     }
 
-    fn profile_menu(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn profile_menu(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::new(self.settings.theme == "light");
+        let (_, _, tabs_extent) = self.tab_dimensions(window);
+        let inset = if cfg!(target_os = "macos") { 78. } else { 0. };
+        let menu_left = (inset + tabs_extent + 40.)
+            .min(f32::from(window.viewport_size().width) - 348.)
+            .max(8.);
         let mut menu = div()
             .id("profile-menu")
             .absolute()
             .top(px(40.))
-            .right(px(if cfg!(windows) { 164. } else { 24. }))
+            .left(px(menu_left))
             .w(px(340.))
             .max_h(px(500.))
             .overflow_y_scroll()
@@ -845,7 +897,7 @@ impl TerminalApp {
                         theme.panel
                     })
                     .hover(|s| s.bg(theme.hover))
-                    .child(div().text_color(theme.accent).child(">_"))
+                    .child(icon(Icon::Terminal, 16.).text_color(theme.accent))
                     .child(
                         div()
                             .flex_1()
@@ -883,7 +935,7 @@ impl TerminalApp {
                         theme.panel
                     })
                     .hover(|s| s.bg(theme.hover))
-                    .child("⚙")
+                    .child(icon(Icon::Settings, 16.))
                     .child(div().flex_1().child("설정"))
                     .child(
                         div()
@@ -921,9 +973,9 @@ impl TerminalApp {
             .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸", profiles))
             .child(setting("터미널 글꼴", "설치된 고정폭 글꼴 이름 · 한글과 이모지는 대체 글꼴 사용", self.font_input.clone()))
             .child(setting("글꼴 크기", "8–48 px", div().flex().items_center().gap_3()
-                .child(button("font-smaller", "−", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size - 1.).max(8.); cx.notify(); })))
+                .child(icon_button("font-smaller", Icon::Minus, "글꼴 크기 줄이기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size - 1.).max(8.); cx.notify(); })))
                 .child(format!("{} px", self.draft.font_size))
-                .child(button("font-larger", "+", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size + 1.).min(48.); cx.notify(); })))))
+                .child(icon_button("font-larger", Icon::Plus, "글꼴 크기 늘리기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size + 1.).min(48.); cx.notify(); })))))
             .child(setting("스크롤백", "탭당 보관할 줄 수 · 최대 1,000,000줄", self.history_input.clone()))
             .child(setting("테마", "터미널과 앱에 함께 적용", button("theme", if self.draft.theme == "light" { "라이트" } else { "다크" }, theme).px_4().py_2().on_click(cx.listener(|this, _, _, cx| { this.draft.theme = if this.draft.theme == "light" { "dark" } else { "light" }.into(); cx.notify(); }))))
             .child(toggle("confirm-close", "창을 닫을 때 열린 세션 확인", self.draft.confirm_close, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.confirm_close = !this.draft.confirm_close; cx.notify(); })))
@@ -975,15 +1027,45 @@ fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, theme: Theme
         .hover(move |s| s.bg(theme.hover))
         .child(label)
 }
+
+fn icon_button(
+    id: impl Into<ElementId>,
+    name: Icon,
+    label: &'static str,
+    theme: Theme,
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label)
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .rounded_sm()
+        .cursor_pointer()
+        .bg(theme.panel)
+        .text_color(theme.fg)
+        .hover(move |s| s.bg(theme.hover))
+        .child(icon(name, 16.))
+}
+
 fn toggle(id: &'static str, label: &'static str, enabled: bool, theme: Theme) -> Stateful<Div> {
-    button(
+    icon_button(
         id,
-        format!("{}  {label}", if enabled { "☑" } else { "☐" }),
+        if enabled {
+            Icon::CheckSquare
+        } else {
+            Icon::Square
+        },
+        label,
         theme,
     )
     .justify_start()
+    .gap_2()
     .px_3()
     .py_2()
+    .child(label)
 }
 fn setting(label: &'static str, description: &'static str, control: impl IntoElement) -> Div {
     div()
@@ -1016,13 +1098,14 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
             .flex_shrink_0()
             .font_family("Segoe MDL2 Assets")
             .text_size(px(10.))
+            .line_height(px(10.))
             .text_color(theme.fg)
             .hover(move |s| {
-                s.bg(if area == WindowControlArea::Close {
-                    rgb(0xc42b1c).into()
+                if area == WindowControlArea::Close {
+                    s.bg(rgb(0xc42b1c)).text_color(rgb(0xffffff))
                 } else {
-                    theme.hover
-                })
+                    s.bg(theme.hover)
+                }
             })
             .child(symbol)
     };
@@ -1090,12 +1173,14 @@ impl Render for TerminalApp {
                             cx.listener(|this, _, window, cx| this.settings_tab(window, cx)),
                         ))
                     })
-                    .child(button("dismiss-status", "×", theme).size(px(22.)).on_click(
-                        cx.listener(|this, _, _, cx| {
-                            this.status = None;
-                            cx.notify();
-                        }),
-                    )),
+                    .child(
+                        icon_button("dismiss-status", Icon::Close, "알림 닫기", theme)
+                            .size(px(22.))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.status = None;
+                                cx.notify();
+                            })),
+                    ),
             );
         }
         if self.search_visible {
@@ -1103,43 +1188,46 @@ impl Render for TerminalApp {
                 .active_terminal()
                 .map(|t| t.read(cx).search_result.clone())
                 .unwrap_or_default();
-            root =
-                root.child(
-                    div()
-                        .absolute()
-                        .top(px(44.))
-                        .right(px(16.))
-                        .w(px(450.))
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .p_2()
-                        .rounded_md()
-                        .bg(theme.panel)
-                        .border_1()
-                        .border_color(theme.border)
-                        .shadow_lg()
-                        .child(div().flex_1().min_w_0().child(self.search.clone()))
-                        .child(
-                            div()
-                                .text_size(px(11.))
-                                .text_color(theme.muted)
-                                .child(result),
-                        )
-                        .child(
-                            button("find-prev", "↑", theme)
-                                .size(px(26.))
-                                .on_click(cx.listener(|this, _, _, cx| this.find(true, true, cx))),
-                        )
-                        .child(
-                            button("find-next", "↓", theme)
-                                .size(px(26.))
-                                .on_click(cx.listener(|this, _, _, cx| this.find(false, true, cx))),
-                        )
-                        .child(button("close-search", "×", theme).size(px(26.)).on_click(
-                            cx.listener(|this, _, window, cx| this.hide_search(window, cx)),
-                        )),
-                );
+            root = root.child(
+                div()
+                    .absolute()
+                    .top(px(44.))
+                    .right(px(16.))
+                    .w(px(450.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .p_2()
+                    .rounded_md()
+                    .bg(theme.panel)
+                    .border_1()
+                    .border_color(theme.border)
+                    .shadow_lg()
+                    .child(div().flex_1().min_w_0().child(self.search.clone()))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme.muted)
+                            .child(result),
+                    )
+                    .child(
+                        icon_button("find-prev", Icon::ArrowUp, "이전 검색 결과", theme)
+                            .size(px(26.))
+                            .on_click(cx.listener(|this, _, _, cx| this.find(true, true, cx))),
+                    )
+                    .child(
+                        icon_button("find-next", Icon::ArrowDown, "다음 검색 결과", theme)
+                            .size(px(26.))
+                            .on_click(cx.listener(|this, _, _, cx| this.find(false, true, cx))),
+                    )
+                    .child(
+                        icon_button("close-search", Icon::Close, "검색 닫기", theme)
+                            .size(px(26.))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.hide_search(window, cx)),
+                            ),
+                    ),
+            );
         }
         if self.menu {
             root = root.child(
@@ -1160,7 +1248,7 @@ impl Render for TerminalApp {
                         }),
                     ),
             );
-            root = root.child(self.profile_menu(cx));
+            root = root.child(self.profile_menu(window, cx));
         }
         if self.confirm || self.closing {
             let closing = self.closing;
@@ -1223,72 +1311,74 @@ pub fn run() {
         saved
     };
     let detected = platform::discover_profiles();
-    gpui_platform::application().run(move |cx| {
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
+    gpui_platform::application()
+        .with_assets(icons::Assets)
+        .run(move |cx| {
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
+            let restore_size = size(
+                px(if saved.width.is_finite() && saved.width >= 560. {
+                    saved.width.min(5000.)
+                } else {
+                    1100.
+                }),
+                px(if saved.height.is_finite() && saved.height >= 320. {
+                    saved.height.min(3000.)
+                } else {
+                    720.
+                }),
+            );
+            let mut bounds = Bounds::centered(None, restore_size, cx);
+            // Retain positions only when they still intersect a connected display.
+            if let (Some(x), Some(y)) = (saved.x, saved.y)
+                && x.is_finite()
+                && y.is_finite()
+            {
+                let candidate = Bounds::new(point(px(x), px(y)), restore_size);
+                if cx
+                    .displays()
+                    .iter()
+                    .any(|d| d.bounds().intersects(&candidate))
+                {
+                    bounds = candidate;
+                }
+            }
+            let options = WindowOptions {
+                window_bounds: Some(if saved.maximized {
+                    WindowBounds::Maximized(bounds)
+                } else {
+                    WindowBounds::Windowed(bounds)
+                }),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("edolterm".into()),
+                    appears_transparent: cfg!(windows),
+                    ..Default::default()
+                }),
+                window_min_size: Some(size(px(560.), px(320.))),
+                app_id: Some("dev.edoli.edolterm".into()),
+                ..Default::default()
+            };
+            if let Err(e) = cx.open_window(options, |window, cx| {
+                let root = cx
+                    .new(|cx| TerminalApp::new(dir, settings, detected, saved, error, window, cx));
+                let weak = root.downgrade();
+                window.on_window_should_close(cx, move |window, cx| {
+                    weak.update(cx, |this, cx| this.should_close(window, cx))
+                        .unwrap_or(true)
+                });
+                #[cfg(debug_assertions)]
+                if let Some(mode) = smoke_mode {
+                    smoke::start(root.clone(), mode, window, cx);
+                }
+                window.activate_window();
+                root
+            }) {
+                eprintln!("창을 열지 못했습니다: {e:#}");
                 cx.quit();
             }
-        })
-        .detach();
-        let restore_size = size(
-            px(if saved.width.is_finite() && saved.width >= 560. {
-                saved.width.min(5000.)
-            } else {
-                1100.
-            }),
-            px(if saved.height.is_finite() && saved.height >= 320. {
-                saved.height.min(3000.)
-            } else {
-                720.
-            }),
-        );
-        let mut bounds = Bounds::centered(None, restore_size, cx);
-        // Retain positions only when they still intersect a connected display.
-        if let (Some(x), Some(y)) = (saved.x, saved.y)
-            && x.is_finite()
-            && y.is_finite()
-        {
-            let candidate = Bounds::new(point(px(x), px(y)), restore_size);
-            if cx
-                .displays()
-                .iter()
-                .any(|d| d.bounds().intersects(&candidate))
-            {
-                bounds = candidate;
-            }
-        }
-        let options = WindowOptions {
-            window_bounds: Some(if saved.maximized {
-                WindowBounds::Maximized(bounds)
-            } else {
-                WindowBounds::Windowed(bounds)
-            }),
-            titlebar: Some(TitlebarOptions {
-                title: Some("edolterm".into()),
-                appears_transparent: cfg!(windows),
-                ..Default::default()
-            }),
-            window_min_size: Some(size(px(560.), px(320.))),
-            app_id: Some("dev.edoli.edolterm".into()),
-            ..Default::default()
-        };
-        if let Err(e) = cx.open_window(options, |window, cx| {
-            let root =
-                cx.new(|cx| TerminalApp::new(dir, settings, detected, saved, error, window, cx));
-            let weak = root.downgrade();
-            window.on_window_should_close(cx, move |window, cx| {
-                weak.update(cx, |this, cx| this.should_close(window, cx))
-                    .unwrap_or(true)
-            });
-            #[cfg(debug_assertions)]
-            if let Some(mode) = smoke_mode {
-                smoke::start(root.clone(), mode, window, cx);
-            }
-            window.activate_window();
-            root
-        }) {
-            eprintln!("창을 열지 못했습니다: {e:#}");
-            cx.quit();
-        }
-    });
+        });
 }
