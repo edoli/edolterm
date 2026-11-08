@@ -125,6 +125,7 @@ impl TerminalView {
                 }
                 cx.notify();
             }),
+            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
         ];
         Self {
             title: profile.name.clone(),
@@ -629,6 +630,7 @@ impl TerminalView {
             )
         };
         let origin = bounds.origin + point(px(8.), px(6.));
+        let focused = self.focus.is_focused(window) && window.is_window_active();
         let mut spans: Vec<TextSpan> = Vec::with_capacity(rows);
         for (p, cell) in cells {
             let row = p.line.0 + offset as i32;
@@ -667,6 +669,7 @@ impl TerminalView {
             }
             let is_cursor = p == cursor.point
                 && cursor.shape != CursorShape::Hidden
+                && focused
                 && self.cursor_on
                 && self.preedit.is_empty();
             if is_cursor {
@@ -677,15 +680,11 @@ impl TerminalView {
                         px(self.cell_height),
                     ),
                 );
-                let focused = self.focus.is_focused(window) && window.is_window_active();
                 match cursor.shape {
                     CursorShape::Beam => bounds.size.width = px(2.),
                     CursorShape::Underline => {
                         bounds.origin.y += px(self.cell_height - 2.);
                         bounds.size.height = px(2.);
-                    }
-                    _ if !focused => {
-                        bounds.size.height = px(1.);
                     }
                     _ => {
                         fg = theme.terminal_bg();

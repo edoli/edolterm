@@ -632,7 +632,7 @@ impl TerminalApp {
                     .border_color(theme.border)
                     .bg(if active { theme.bg } else { theme.bar })
                     .hover(|s| s.bg(if active { theme.bg } else { theme.hover }))
-                    .cursor_pointer()
+                    .cursor_default()
                     .tooltip(tip(tooltip))
                     .text_size(px(12.))
                     .text_color(if active { theme.fg } else { theme.muted })
@@ -741,7 +741,7 @@ impl TerminalApp {
                                 .right_0()
                                 .h(px(5.))
                                 .bg(theme.border)
-                                .cursor_pointer()
+                                .cursor_default()
                                 .child(
                                     div()
                                         .absolute()
@@ -791,6 +791,7 @@ impl TerminalApp {
             )
             .child(
                 icon_button("new-tab", Icon::Plus, "새 탭", theme)
+                    .cursor_default()
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
@@ -799,6 +800,7 @@ impl TerminalApp {
             )
             .child(
                 icon_button("profiles", Icon::ChevronDown, "프로필 및 설정", theme)
+                    .cursor_default()
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
@@ -893,7 +895,7 @@ impl TerminalApp {
                     .px_3()
                     .py_2()
                     .rounded_sm()
-                    .cursor_pointer()
+                    .cursor_default()
                     .bg(if self.menu_index == index {
                         theme.hover
                     } else {
@@ -931,7 +933,7 @@ impl TerminalApp {
                     .px_3()
                     .py_2()
                     .rounded_sm()
-                    .cursor_pointer()
+                    .cursor_default()
                     .bg(if self.menu_index == self.profiles.len() {
                         theme.hover
                     } else {

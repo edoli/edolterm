@@ -9,6 +9,7 @@ use alacritty_terminal::{
     sync::FairMutex,
     term::{Config, Osc52},
     tty,
+    vte::ansi::{CursorShape, CursorStyle},
 };
 use anyhow::{Context, Result};
 use std::{
@@ -94,6 +95,10 @@ pub struct Session {
 pub fn term_config(settings: &Settings) -> Config {
     Config {
         scrolling_history: settings.scrollback,
+        default_cursor_style: CursorStyle {
+            shape: CursorShape::Beam,
+            blinking: true,
+        },
         kitty_keyboard: false,
         osc52: if settings.allow_osc52 {
             Osc52::OnlyCopy
