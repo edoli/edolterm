@@ -19,10 +19,14 @@ use std::{
     },
 };
 
+#[cfg(windows)]
+#[path = "session/windows_pty.rs"]
+pub(crate) mod windows_pty;
+
 #[derive(Clone)]
 pub struct EventProxy {
-    tx: async_channel::Sender<Event>,
-    pending: Arc<AtomicBool>,
+    pub(crate) tx: async_channel::Sender<Event>,
+    pub(crate) pending: Arc<AtomicBool>,
 }
 
 impl EventListener for EventProxy {
@@ -149,8 +153,12 @@ impl Session {
             #[cfg(windows)]
             escape_args: true,
         };
-        let pty = tty::new(&options, size.into(), window_id)
-            .with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
+        #[cfg(windows)]
+        let pty = windows_pty::new(&options, size.into(), window_id);
+        #[cfg(not(windows))]
+        let pty = tty::new(&options, size.into(), window_id);
+        let pty =
+            pty.with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
         let event_loop = EventLoop::new(terminal.clone(), proxy, pty, true, false)?;
         let sender = event_loop.channel();
         let io_thread = event_loop.spawn();
@@ -224,6 +232,84 @@ impl Drop for Session {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    #[cfg(windows)]
+    fn conpty_preserves_background_colors_and_color_environment() {
+        use alacritty_terminal::vte::ansi::{Color, Rgb};
+        let script = r#"$e = [char]27; [Console]::Write("${e}[0m${e}[2J${e}[H${e}[48;2;38;38;38mT  ${e}[0m`r`n${e}[48;5;236mI  ${e}[0m`r`n${e}[100mN  ${e}[0m`r`n${e}]10;?${e}\${e}]11;?${e}\"); Start-Sleep -Milliseconds 300; $reply = ''; while ([Console]::KeyAvailable) { $reply += [Console]::ReadKey($true).KeyChar }; [Console]::Write("REPLY:$([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($reply)))`r`nENV:$env:TERM,$env:COLORTERM,$env:TERM_PROGRAM`r`n"); Start-Sleep -Seconds 20"#;
+        let profile = Profile::new(
+            "colors",
+            "colors",
+            "powershell.exe",
+            &["-NoLogo", "-NoProfile", "-Command", script],
+        );
+        let (session, events) = Session::start(profile, None, &Settings::default(), 0).unwrap();
+        let started = Instant::now();
+        let mut color_requests = Vec::new();
+        loop {
+            while let Ok(event) = events.try_recv() {
+                match event {
+                    Event::PtyWrite(text) => session.write(text.into_bytes()),
+                    Event::Wakeup => session.pending.store(false, Ordering::Release),
+                    Event::ColorRequest(i, f) => {
+                        color_requests.push(i);
+                        let color = crate::theme::Theme::new(false)
+                            .rgb(i, session.terminal.lock().renderable_content().colors);
+                        session.write(f(color).into_bytes());
+                    }
+                    _ => {}
+                }
+            }
+            let text = session.plain_text();
+            if text.contains("ENV:") {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(15),
+                "PTY output: {text}"
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(
+            session
+                .plain_text()
+                .contains("ENV:xterm-256color,truecolor,edolterm")
+        );
+        // System ConPTY versions may swallow OSC queries. Report this separately
+        // from SGR preservation; lack of OSC support is not a cell color failure.
+        eprintln!("OSC color queries received by terminal: {color_requests:?}");
+        if let Some(reply) = session
+            .plain_text()
+            .lines()
+            .find(|line| line.starts_with("REPLY:"))
+        {
+            eprintln!("OSC reply (base64): {}", &reply[6..]);
+        }
+        let term = session.terminal.lock();
+        for (row, marker, gray) in [(0, 'T', 38), (1, 'I', 48), (2, 'N', 118)] {
+            let expected = Rgb {
+                r: gray,
+                g: gray,
+                b: gray,
+            };
+            assert_eq!(term.grid()[Point::new(Line(row), Column(0))].c, marker);
+            for col in 0..3 {
+                let cell = &term.grid()[Point::new(Line(row), Column(col))];
+                let actual = match cell.bg {
+                    Color::Spec(rgb) => rgb,
+                    Color::Indexed(i) => crate::theme::Theme::new(false)
+                        .rgb(i as usize, term.renderable_content().colors),
+                    Color::Named(i) => crate::theme::Theme::new(false)
+                        .rgb(i as usize, term.renderable_content().colors),
+                };
+                assert_eq!(actual, expected, "background for {marker} column {col}");
+            }
+        }
+        drop(term);
+        session.shutdown();
+    }
+
     #[test]
     #[cfg(windows)]
     fn conpty_unicode_input_resize_and_shutdown() {
