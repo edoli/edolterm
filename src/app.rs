@@ -788,7 +788,7 @@ impl TerminalApp {
             )
             .child(
                 icon_button("new-tab", Icon::Plus, "새 탭", theme)
-                    .w(px(40.))
+                    .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
                     .tooltip(tip("새 탭 · Ctrl+Shift+T".into()))
@@ -796,7 +796,7 @@ impl TerminalApp {
             )
             .child(
                 icon_button("profiles", Icon::ChevronDown, "프로필 및 설정", theme)
-                    .w(px(40.))
+                    .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
                     .tooltip(tip("프로필 및 설정 · Ctrl+Shift+P".into()))
