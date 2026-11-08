@@ -19,6 +19,9 @@ use std::{
     },
 };
 
+#[path = "session/working_directory.rs"]
+mod working_directory;
+
 #[cfg(windows)]
 #[path = "session/windows_pty.rs"]
 pub(crate) mod windows_pty;
@@ -81,7 +84,7 @@ impl From<GridSize> for WindowSize {
 
 pub struct Session {
     pub terminal: Arc<FairMutex<Terminal>>,
-    pub cwd: PathBuf,
+    cwd: working_directory::WorkingDirectory,
     pub size: GridSize,
     pub pending: Arc<AtomicBool>,
     sender: EventLoopSender,
@@ -108,7 +111,9 @@ impl Session {
         settings: &Settings,
         window_id: u64,
     ) -> Result<(Self, async_channel::Receiver<Event>)> {
-        let cwd = cwd
+        let restore_cwd = cwd.filter(|path| path.is_dir());
+        let cwd = restore_cwd
+            .clone()
             .or_else(|| profile.cwd.clone())
             .unwrap_or_else(crate::platform::home_dir);
         if !cwd.is_dir() {
@@ -127,6 +132,13 @@ impl Session {
             proxy.clone(),
         )));
         let mut env: std::collections::HashMap<_, _> = profile.env.clone().into_iter().collect();
+        if let Some(path) = restore_cwd {
+            env.insert(
+                "EDOLTERM_RESTORE_CWD".into(),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+        let args = working_directory::shell_args(&profile, &mut env);
         env.entry("TERM".into())
             .or_insert_with(|| "xterm-256color".into());
         env.entry("COLORTERM".into())
@@ -146,7 +158,7 @@ impl Session {
         #[cfg(not(windows))]
         let program = profile.program.clone();
         let options = tty::Options {
-            shell: Some(tty::Shell::new(program, profile.args.clone())),
+            shell: Some(tty::Shell::new(program, args)),
             working_directory: Some(cwd.clone()),
             drain_on_exit: true,
             env,
@@ -159,6 +171,8 @@ impl Session {
         let pty = tty::new(&options, size.into(), window_id);
         let pty =
             pty.with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
+        let cwd = working_directory::WorkingDirectory::new(cwd);
+        let pty = working_directory::TrackedPty::new(pty, cwd.clone());
         let event_loop = EventLoop::new(terminal.clone(), proxy, pty, true, false)?;
         let sender = event_loop.channel();
         let io_thread = event_loop.spawn();
@@ -185,6 +199,10 @@ impl Session {
 
     pub fn write(&self, bytes: impl Into<Vec<u8>>) {
         let _ = self.sender.send(Msg::Input(bytes.into().into()));
+    }
+
+    pub fn working_directory(&self) -> PathBuf {
+        self.cwd.get()
     }
 
     pub fn input(&self, bytes: impl Into<Vec<u8>>) {
@@ -232,6 +250,166 @@ impl Drop for Session {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    #[cfg(windows)]
+    fn changed_shell_directories_survive_session_save_and_restart() {
+        use crate::config::{SavedSession, SavedTab};
+        let root = std::env::temp_dir().join(format!("edolterm-cwd-{}", std::process::id()));
+        let mut profiles = vec![
+            Profile::new(
+                "powershell",
+                "Windows PowerShell",
+                "powershell.exe",
+                &["-NoLogo", "-NoProfile"],
+            ),
+            Profile::new("cmd", "CMD", "cmd.exe", &["/D"]),
+        ];
+        if let Some(pwsh) = crate::platform::find_program("pwsh") {
+            profiles.push(Profile::new(
+                "pwsh",
+                "PowerShell",
+                pwsh.to_string_lossy(),
+                &["-NoLogo", "-NoProfile"],
+            ));
+        }
+        let mut saved = SavedSession::default();
+        for profile in &profiles {
+            let dir = root.join(format!("{} 한글 '프로젝트; 경로", profile.id));
+            std::fs::create_dir_all(&dir).unwrap();
+            let (session, events) =
+                Session::start(profile.clone(), None, &Settings::default(), 0).unwrap();
+            let command = if profile.id == "cmd" {
+                format!("cd /d \"{}\"\r", dir.display())
+            } else {
+                format!(
+                    "Set-Location -LiteralPath '{}'\r",
+                    dir.to_string_lossy().replace('\'', "''")
+                )
+            };
+            session.input(command.into_bytes());
+            pump_until(&session, &events, || session.working_directory() == dir);
+            saved.tabs.push(SavedTab {
+                profile_id: profile.id.clone(),
+                cwd: session.working_directory(),
+            });
+            stop_and_wait(&session);
+        }
+        saved.save(&root).unwrap();
+        let saved = SavedSession::load(&root).unwrap();
+        assert_eq!(saved.tabs.len(), profiles.len());
+        for (tab, profile) in saved.tabs.into_iter().zip(profiles) {
+            let (mut session, events) = Session::start(
+                profile.clone(),
+                Some(tab.cwd.clone()),
+                &Settings::default(),
+                0,
+            )
+            .unwrap();
+            // Read the actual restarted shell location, not just Session metadata.
+            let command = if profile.id == "cmd" {
+                "echo RESTORED_%CD%\r"
+            } else {
+                "[Console]::WriteLine(('RESTORED_' + $PWD.ProviderPath))\r"
+            };
+            session.resize(GridSize {
+                cols: 300,
+                ..GridSize::default()
+            });
+            session.input(command.as_bytes().to_vec());
+            let expected = format!("RESTORED_{}", tab.cwd.display());
+            pump_until(&session, &events, || {
+                session.plain_text().contains(&expected)
+            });
+            stop_and_wait(&session);
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn powershell_integration_preserves_custom_prompt_and_command_status() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut programs = vec![PathBuf::from("powershell.exe")];
+        if let Some(pwsh) = crate::platform::find_program("pwsh") {
+            programs.push(pwsh);
+        }
+        for program in programs {
+            let script = format!(
+                "function global:prompt {{ \"PROMPT_STATUS:$?,$global:LASTEXITCODE,$($global:Error.Count)> \" }}\n{}",
+                include_str!("../assets/shell-integration/powershell.ps1")
+            );
+            let encoded = STANDARD.encode(
+                script
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            );
+            let profile = Profile::new(
+                "prompt",
+                "Prompt",
+                program.to_string_lossy(),
+                &[
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NoExit",
+                    "-EncodedCommand",
+                    &encoded,
+                ],
+            );
+            let (session, events) = Session::start(profile, None, &Settings::default(), 0).unwrap();
+            session.input(b"cmd.exe /d /c exit 7\r".to_vec());
+            pump_until(&session, &events, || {
+                session.plain_text().contains("PROMPT_STATUS:False,7,0>")
+            });
+            session.input(b"$null = 1\r".to_vec());
+            pump_until(&session, &events, || {
+                session.plain_text().contains("PROMPT_STATUS:True,7,0>")
+            });
+            stop_and_wait(&session);
+        }
+    }
+
+    #[cfg(windows)]
+    fn pump_until(
+        session: &Session,
+        events: &async_channel::Receiver<Event>,
+        ready: impl Fn() -> bool,
+    ) {
+        let start = Instant::now();
+        loop {
+            while let Ok(event) = events.try_recv() {
+                match event {
+                    Event::PtyWrite(text) => session.write(text.into_bytes()),
+                    Event::Wakeup => session.pending.store(false, Ordering::Release),
+                    _ => {}
+                }
+            }
+            if ready() {
+                return;
+            }
+            assert!(
+                start.elapsed() < Duration::from_secs(20),
+                "cwd: {:?}, PTY output: {}",
+                session.working_directory(),
+                session.plain_text()
+            );
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    #[cfg(windows)]
+    fn stop_and_wait(session: &Session) {
+        session.shutdown();
+        let start = Instant::now();
+        while session.completed.try_recv().is_err() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "ConPTY did not close"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 
     #[test]
     #[cfg(windows)]

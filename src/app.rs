@@ -303,7 +303,7 @@ impl TerminalApp {
                 let s = t.session.as_ref()?;
                 Some(SavedTab {
                     profile_id: t.profile.id.clone(),
-                    cwd: s.cwd.clone(),
+                    cwd: s.working_directory(),
                 })
             })
             .collect();
