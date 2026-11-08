@@ -14,6 +14,8 @@ use std::{
 
 #[cfg(debug_assertions)]
 mod smoke;
+mod tabs;
+use tabs::{TabDrag, TabMotion};
 
 struct Tab {
     id: u64,
@@ -21,23 +23,6 @@ struct Tab {
     _subscription: Option<Subscription>,
 }
 
-#[derive(Clone)]
-struct TabDrag {
-    id: u64,
-    title: String,
-}
-struct DragLabel(String);
-impl Render for DragLabel {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_2()
-            .bg(rgb(0x303a49))
-            .text_color(rgb(0xe1e7f0))
-            .text_size(px(13.))
-            .child(self.0.clone())
-    }
-}
 struct Tip(String);
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -67,6 +52,8 @@ pub struct TerminalApp {
     focus: FocusHandle,
     tab_scroll: ScrollHandle,
     tab_scroll_drag: bool,
+    tab_drag: Option<TabDrag>,
+    tab_motions: Vec<TabMotion>,
     menu: bool,
     menu_index: usize,
     confirm: bool,
@@ -107,7 +94,12 @@ impl TerminalApp {
                     FieldEvent::Cancel => this.hide_search(window, cx),
                 },
             ),
-            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.finish_tab_drag(true, window, cx);
+                }
+                cx.notify();
+            }),
         ];
         let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
         let mut this = Self {
@@ -122,6 +114,8 @@ impl TerminalApp {
             focus: cx.focus_handle(),
             tab_scroll: ScrollHandle::new(),
             tab_scroll_drag: false,
+            tab_drag: None,
+            tab_motions: Vec::new(),
             menu: false,
             menu_index: 0,
             confirm: false,
@@ -232,6 +226,7 @@ impl TerminalApp {
         cx.notify();
     }
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        self.finish_tab_drag(true, window, cx);
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
             return;
         };
@@ -258,6 +253,7 @@ impl TerminalApp {
         });
         self.activate(index, window, cx);
     }
+    #[cfg(debug_assertions)]
     fn reorder(&mut self, id: u64, target: usize, window: &mut Window, cx: &mut Context<Self>) {
         let active_id = self.tabs[self.active].id;
         let Some(from) = self.tabs.iter().position(|t| t.id == id) else {
@@ -452,6 +448,13 @@ impl TerminalApp {
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
         let m = k.modifiers;
+        if self.tab_drag.as_ref().is_some_and(|drag| drag.started) {
+            if k.key == "escape" {
+                self.finish_tab_drag(true, window, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self.closing {
             cx.stop_propagation();
             return;
@@ -576,7 +579,8 @@ impl TerminalApp {
         )
     }
 
-    fn tabs_view(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+    fn tabs_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        self.animate_tabs(window, cx);
         let theme = Theme::new(self.settings.theme == "light");
         let controls = cfg!(windows) && !window.is_fullscreen();
         let left = if cfg!(target_os = "macos") { 78. } else { 0. };
@@ -604,108 +608,26 @@ impl TerminalApp {
                 cx.stop_propagation();
                 cx.notify();
             }));
+        let dragging = self
+            .tab_drag
+            .as_ref()
+            .filter(|drag| drag.started)
+            .map(|drag| drag.id);
         for (index, tab) in self.tabs.iter().enumerate() {
-            let id = tab.id;
-            let active = index == self.active;
-            let (title, icon, bell) = if let Some(t) = &tab.terminal {
-                let t = t.read(cx);
-                (t.title.clone(), Icon::Terminal, t.bell)
+            if dragging == Some(tab.id) {
+                strip = strip.child(
+                    div()
+                        .w(px(tab_width))
+                        .h_full()
+                        .flex_shrink_0()
+                        .bg(theme.bar),
+                );
             } else {
-                ("설정".into(), Icon::Settings, false)
-            };
-            let tooltip = title.clone();
-            strip = strip.child(
-                div()
-                    .id(("tab", id))
-                    .role(Role::Tab)
-                    .aria_label(title.clone())
-                    .aria_selected(active)
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .h_full()
-                    .w(px(tab_width))
-                    .flex_shrink_0()
-                    .px_2()
-                    .gap_2()
-                    .border_r_1()
-                    .border_color(theme.border)
-                    .bg(if active { theme.bg } else { theme.bar })
-                    .hover(|s| s.bg(if active { theme.bg } else { theme.hover }))
-                    .cursor_default()
-                    .tooltip(tip(tooltip))
-                    .text_size(px(12.))
-                    .text_color(if active { theme.fg } else { theme.muted })
-                    .when(active, |d| {
-                        d.child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .right_0()
-                                .top_0()
-                                .h(px(2.))
-                                .bg(theme.accent),
-                        )
-                    })
-                    .child(
-                        div()
-                            .text_color(if bell {
-                                rgb(0xe5c07b).into()
-                            } else {
-                                theme.accent
-                            })
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(16.))
-                            .flex_shrink_0()
-                            .child(icons::icon(icon, 16.)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .child(title.clone()),
-                    )
-                    .child(
-                        div()
-                            .id(("close-tab", id))
-                            .role(Role::Button)
-                            .aria_label("탭 닫기")
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .size(px(22.))
-                            .flex_shrink_0()
-                            .rounded_sm()
-                            .hover(|s| s.bg(theme.hover))
-                            .child(icons::icon(Icon::Close, 14.))
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.close_tab(id, window, cx);
-                                cx.stop_propagation();
-                            })),
-                    )
-                    .on_click(
-                        cx.listener(move |this, _, window, cx| this.activate(index, window, cx)),
-                    )
-                    .on_mouse_down(
-                        MouseButton::Middle,
-                        cx.listener(move |this, _, window, cx| {
-                            this.close_tab(id, window, cx);
-                            cx.stop_propagation();
-                        }),
-                    )
-                    .on_drag(TabDrag { id, title }, |drag, _, _, cx| {
-                        cx.new(|_| DragLabel(drag.title.clone()))
-                    })
-                    .on_drop(cx.listener(move |this, drag: &TabDrag, window, cx| {
-                        this.reorder(drag.id, index, window, cx)
-                    })),
-            );
+                strip = strip.child(
+                    self.tab_element(tab, index, tab_width, false, cx)
+                        .left(px(self.tab_slide_offset(tab.id))),
+                );
+            }
         }
         let overflow = tab_width * self.tabs.len() as f32 > viewport + 1.;
         let total = tab_width * self.tabs.len() as f32;
@@ -714,6 +636,11 @@ impl TerminalApp {
         let thumb_left = (-f32::from(self.tab_scroll.offset().x) / max_scroll).clamp(0., 1.)
             * (viewport - thumb_width);
         let active = self.active;
+        let dragged_left = dragging.map(|_| self.dragged_tab_left(window));
+        let active_slide = self
+            .tabs
+            .get(active)
+            .map_or(0., |tab| self.tab_slide_offset(tab.id));
         let scroll = self.tab_scroll.clone();
         div()
             .relative()
@@ -731,6 +658,17 @@ impl TerminalApp {
                     .min_w_0()
                     .overflow_hidden()
                     .child(strip)
+                    .when_some(dragging, |container, id| {
+                        let Some(index) = self.tabs.iter().position(|tab| tab.id == id) else {
+                            return container;
+                        };
+                        container.child(
+                            self.tab_element(&self.tabs[index], index, tab_width, true, cx)
+                                .absolute()
+                                .top_0()
+                                .left(px(self.dragged_tab_left(window))),
+                        )
+                    })
                     .when(overflow, |d| {
                         d.child(
                             div()
@@ -821,16 +759,17 @@ impl TerminalApp {
                     .window_control_area(WindowControlArea::Drag),
             )
             .when(controls, |d| d.child(window_controls(window, theme)))
-            // Paint the divider after layout, leaving a gap under the active tab.
+            // Keep the divider gap under the active tab, including drag/slide motion.
             // Read the scroll offset in prepaint so tab reveal/scroll stays aligned.
             .child(
                 canvas(
                     move |_, _, _| {
                         let offset = f32::from(scroll.offset().x);
-                        let start = (left + active as f32 * tab_width + offset)
-                            .clamp(left, left + tabs_extent);
-                        let end = (left + (active + 1) as f32 * tab_width + offset)
-                            .clamp(left, left + tabs_extent);
+                        let tab_left = left
+                            + dragged_left
+                                .unwrap_or(active as f32 * tab_width + offset + active_slide);
+                        let start = tab_left.clamp(left, left + tabs_extent);
+                        let end = (tab_left + tab_width).clamp(left, left + tabs_extent);
                         (start, end)
                     },
                     move |bounds, (start, end), window, _| {
@@ -858,6 +797,9 @@ impl TerminalApp {
                 .top_0()
                 .size_full(),
             )
+            .when(self.tab_drag.is_some(), |bar| {
+                bar.child(self.tab_drag_listener(cx))
+            })
             .into_any_element()
     }
 
