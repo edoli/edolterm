@@ -16,6 +16,9 @@ use alacritty_terminal::{
 use gpui::{prelude::*, *};
 use std::{ops::Range, sync::atomic::Ordering, time::Duration};
 
+mod scroll;
+use scroll::ScrollLines;
+
 pub enum TerminalEvent {
     Metadata,
     Exited(bool),
@@ -39,7 +42,7 @@ pub struct TerminalView {
     preedit_selection: Range<usize>,
     cursor_bounds: Bounds<Pixels>,
     selecting: bool,
-    scroll_remainder: f32,
+    scroll_lines: ScrollLines,
     last_mouse: Option<(usize, usize)>,
     cursor_on: bool,
     blink: Option<Task<()>>,
@@ -140,7 +143,7 @@ impl TerminalView {
             preedit_selection: 0..0,
             cursor_bounds: Bounds::default(),
             selecting: false,
-            scroll_remainder: 0.,
+            scroll_lines: ScrollLines::default(),
             last_mouse: None,
             cursor_on: true,
             blink: None,
@@ -480,13 +483,11 @@ impl TerminalView {
         let Some(s) = &self.session else {
             return;
         };
-        let delta = match e.delta {
-            ScrollDelta::Lines(p) => p.y * 3.,
-            ScrollDelta::Pixels(p) => f32::from(p.y) / self.cell_height,
-        };
-        self.scroll_remainder += delta;
-        let lines = self.scroll_remainder as i32;
-        self.scroll_remainder -= lines as f32;
+        cx.stop_propagation();
+        let lines = self.scroll_lines.update(e, self.cell_height);
+        if lines == 0 {
+            return;
+        }
         let mode = *s.terminal.lock().mode();
         if !e.modifiers.shift && mode.intersects(TermMode::MOUSE_MODE) {
             for _ in 0..lines.unsigned_abs().min(30) {
@@ -508,7 +509,6 @@ impl TerminalView {
         } else {
             s.terminal.lock().scroll_display(Scroll::Delta(lines));
         }
-        cx.stop_propagation();
         cx.notify();
     }
 
@@ -589,6 +589,7 @@ impl TerminalView {
             )
         };
         let origin = bounds.origin + point(px(8.), px(6.));
+        let mut spans: Vec<TextSpan> = Vec::with_capacity(rows);
         for (p, cell) in cells {
             let row = p.line.0 + offset as i32;
             if row < 0 || row as usize >= rows {
@@ -661,13 +662,9 @@ impl TerminalView {
             if let Some(chars) = cell.zerowidth() {
                 text.extend(chars);
             }
-            if text == " "
-                && !cell
-                    .flags
-                    .intersects(Flags::ALL_UNDERLINES | Flags::STRIKEOUT)
-            {
-                continue;
-            }
+            // Batch single-cell ASCII only. Wide/fallback glyphs and combining marks
+            // retain their explicit cell origins, independent of font advances.
+            let groupable = text.len() == 1 && cell.c.is_ascii() && !wide;
             let mut font = font.clone();
             if cell.flags.contains(Flags::BOLD) {
                 font.weight = FontWeight::BOLD;
@@ -676,7 +673,7 @@ impl TerminalView {
                 font.style = FontStyle::Italic;
             }
             let run = TextRun {
-                len: text.len(),
+                len: 0,
                 font,
                 color: fg,
                 background_color: None,
@@ -695,10 +692,39 @@ impl TerminalView {
                     },
                 ),
             };
-            let line = window
-                .text_system()
-                .shape_line(text.into(), size, &[run], None);
-            frame.glyphs.push((pos, line));
+            if groupable
+                && let Some(last) = spans.last_mut()
+                && last.groupable
+                && last.next == p
+                && last.run == run
+            {
+                last.text.push_str(&text);
+                last.next.column.0 += 1;
+            } else {
+                spans.push(TextSpan {
+                    pos,
+                    text,
+                    run,
+                    next: TermPoint::new(p.line, Column(p.column.0 + 1)),
+                    groupable,
+                });
+            }
+        }
+        for mut span in spans {
+            if span.run.underline.is_none() && span.run.strikethrough.is_none() {
+                span.text.truncate(span.text.trim_end_matches(' ').len());
+            }
+            if span.text.is_empty() {
+                continue;
+            }
+            span.run.len = span.text.len();
+            let line = window.text_system().shape_line(
+                span.text.into(),
+                size,
+                &[span.run],
+                span.groupable.then_some(px(self.cell_width)),
+            );
+            frame.glyphs.push((span.pos, line));
         }
         if !self.preedit.is_empty() {
             let run = TextRun {
@@ -738,6 +764,14 @@ impl TerminalView {
         let _ = cx;
         frame
     }
+}
+
+struct TextSpan {
+    pos: Point<Pixels>,
+    text: String,
+    run: TextRun,
+    next: TermPoint,
+    groupable: bool,
 }
 
 struct Frame {
