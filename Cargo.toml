@@ -8,6 +8,11 @@ license = "Apache-2.0"
 [features]
 ui-tests = ["gpui/test-support", "gpui_platform/test-support"]
 
+[build-dependencies]
+embed-resource = "3.0"
+ico = "0.5"
+resvg = { version = "0.46", default-features = false }
+
 [dependencies]
 anyhow = "1"
 alacritty_terminal = "0.26"
