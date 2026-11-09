@@ -36,11 +36,8 @@ impl TerminalApp {
                     return false;
                 };
                 let view = terminal.read(cx);
-                let Some(session) = &view.session else {
-                    return false;
-                };
                 let profile = view.profile.clone();
-                let cwd = session.working_directory();
+                let cwd = view.working_directory();
                 self.add_terminal(profile, Some(cwd), window, cx);
             }
             Action::NewWindow => {
@@ -378,7 +375,8 @@ impl TerminalApp {
                                 .bg(theme.danger.normal.bg)
                                 .text_color(theme.danger.normal.fg)
                                 .hover(move |s| {
-                                    s.bg(theme.danger.hover.bg).text_color(theme.danger.hover.fg)
+                                    s.bg(theme.danger.hover.bg)
+                                        .text_color(theme.danger.hover.fg)
                                 })
                                 .child(icon(Icon::Trash, 14.))
                                 .on_click(cx.listener(move |this, _, _, cx| {

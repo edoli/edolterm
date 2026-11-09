@@ -8,20 +8,22 @@ use alacritty_terminal::{
 #[cfg(feature = "ui-tests")]
 mod file_drop;
 #[cfg(all(feature = "ui-tests", windows))]
-mod keys;
-#[cfg(all(feature = "ui-tests", windows))]
 mod instances;
+#[cfg(all(feature = "ui-tests", windows))]
+mod keys;
 #[cfg(feature = "ui-tests")]
 mod scroll;
 #[cfg(feature = "ui-tests")]
-mod tabs;
-#[cfg(feature = "ui-tests")]
 mod shortcuts;
+#[cfg(feature = "ui-tests")]
+mod tabs;
 
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links" => mode,
+        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links" => {
+            mode
+        }
         _ => "terminal",
     };
     std::env::current_dir()

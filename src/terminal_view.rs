@@ -1,7 +1,7 @@
 use crate::{
     config::{Profile, Settings},
     keys,
-    session::{GridSize, Session, term_config},
+    session::{GridSize, Session, startup, term_config},
     text_field::utf8_offset,
     theme::Theme,
 };
@@ -14,7 +14,7 @@ use alacritty_terminal::{
     vte::ansi::CursorShape,
 };
 use gpui::{prelude::*, *};
-use std::{ops::Range, sync::atomic::Ordering, time::Duration};
+use std::{ops::Range, path::PathBuf, sync::atomic::Ordering, time::Duration};
 
 mod file_drop;
 mod layout;
@@ -25,6 +25,16 @@ use scroll::ScrollLines;
 pub enum TerminalEvent {
     Metadata,
     Exited(bool),
+}
+
+struct SessionStarts(startup::Launcher);
+impl Global for SessionStarts {}
+
+enum PendingInput {
+    Text(String),
+    Paste(String),
+    KeyDown(Keystroke),
+    KeyUp(Keystroke),
 }
 
 pub struct TerminalView {
@@ -54,6 +64,12 @@ pub struct TerminalView {
     cursor_on: bool,
     win32_enter_pressed: bool,
     blink: Option<Task<()>>,
+    cwd: Option<PathBuf>,
+    window_id: u64,
+    grid_size: GridSize,
+    startup: Option<startup::Pending>,
+    startup_task: Option<Task<()>>,
+    pending_input: Vec<PendingInput>,
     _receiver: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
 }
@@ -68,32 +84,6 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        let result = Session::start(
-            profile.clone(),
-            cwd,
-            &settings,
-            window.window_handle().window_id().as_u64(),
-        );
-        let (session, rx, error) = match result {
-            Ok((s, rx)) => (Some(s), Some(rx), None),
-            Err(e) => (None, None, Some(format!("{e:#}"))),
-        };
-        let receiver = rx.map(|rx| {
-            cx.spawn(async move |this, cx| {
-                while let Ok(event) = rx.recv().await {
-                    let wakeup = matches!(event, Event::Wakeup);
-                    if this.update(cx, |this, cx| this.event(event, cx)).is_err() {
-                        break;
-                    }
-                    // Bound redraws during bursts without polling idle terminals.
-                    if wakeup {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(16))
-                            .await;
-                    }
-                }
-            })
-        });
         let subscriptions = vec![
             cx.on_focus(&focus, window, |this, _, cx| {
                 this.bell = false;
@@ -142,8 +132,8 @@ impl TerminalView {
         Self {
             title: profile.name.clone(),
             profile,
-            session,
-            error,
+            session: None,
+            error: None,
             exited: false,
             bell: false,
             focus,
@@ -166,8 +156,205 @@ impl TerminalView {
             cursor_on: true,
             win32_enter_pressed: false,
             blink: None,
-            _receiver: receiver,
+            cwd,
+            window_id: window.window_handle().window_id().as_u64(),
+            grid_size: GridSize::default(),
+            startup: None,
+            startup_task: None,
+            pending_input: Vec::new(),
+            _receiver: None,
             _subscriptions: subscriptions,
+        }
+    }
+
+    pub fn start(&mut self, selected: bool, cx: &mut Context<Self>) {
+        if self.exited || self.session.is_some() || self.error.is_some() {
+            return;
+        }
+        if let Some(startup) = &self.startup {
+            if selected {
+                startup.prioritize();
+            }
+            return;
+        }
+        if cx.try_global::<SessionStarts>().is_none() {
+            match startup::Launcher::new() {
+                Ok(launcher) => cx.set_global(SessionStarts(launcher)),
+                Err(error) => {
+                    self.error = Some(format!("셸 시작 작업을 만들지 못했습니다: {error}"));
+                    cx.notify();
+                    return;
+                }
+            }
+        }
+        let startup = cx.global::<SessionStarts>().0.start(
+            self.profile.clone(),
+            self.cwd.clone(),
+            self.settings.clone(),
+            self.window_id,
+            selected,
+        );
+        let result = startup.result.clone();
+        self.startup = Some(startup);
+        self.startup_task = Some(cx.spawn(async move |this, cx| {
+            let result = result
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err(anyhow::anyhow!("셸 시작 작업이 종료되었습니다.")));
+            let _ = this.update(cx, |this, cx| {
+                this.startup.take();
+                if this.exited {
+                    return;
+                }
+                match result {
+                    Ok((mut session, events)) => {
+                        // Settings and viewport can change while the child is starting.
+                        session
+                            .terminal
+                            .lock()
+                            .set_options(term_config(&this.settings));
+                        session.resize(this.grid_size);
+                        this.session = Some(session);
+                        for input in std::mem::take(&mut this.pending_input) {
+                            match input {
+                                PendingInput::Text(text) => this.input_text(text),
+                                PendingInput::Paste(text) => this.input_paste(text),
+                                PendingInput::KeyDown(key) => {
+                                    this.input_key(&key);
+                                }
+                                PendingInput::KeyUp(key) => this.release_key(&key),
+                            }
+                        }
+                        this._receiver = Some(cx.spawn(async move |this, cx| {
+                            while let Ok(event) = events.recv().await {
+                                let wakeup = matches!(event, Event::Wakeup);
+                                if this.update(cx, |this, cx| this.event(event, cx)).is_err() {
+                                    break;
+                                }
+                                if wakeup {
+                                    cx.background_executor()
+                                        .timer(Duration::from_millis(16))
+                                        .await;
+                                }
+                            }
+                        }));
+                    }
+                    Err(error) => {
+                        this.error = Some(format!("{error:#}"));
+                        this.pending_input.clear();
+                    }
+                }
+                cx.emit(TerminalEvent::Metadata);
+                cx.notify();
+            });
+        }));
+    }
+
+    pub fn working_directory(&self) -> PathBuf {
+        self.session
+            .as_ref()
+            .map(Session::working_directory)
+            .or_else(|| self.cwd.clone())
+            .or_else(|| self.profile.cwd.clone())
+            .unwrap_or_else(crate::platform::home_dir)
+    }
+
+    #[cfg(all(feature = "ui-tests", debug_assertions))]
+    pub(crate) fn startup_sequence(&self) -> Option<u64> {
+        self.startup.as_ref().map(startup::Pending::sequence)
+    }
+
+    pub fn is_running(&self) -> bool {
+        !self.exited && (self.session.is_some() || self.startup.is_some())
+    }
+
+    pub fn shutdown(&mut self) -> Vec<async_channel::Receiver<()>> {
+        self.exited = true;
+        self.startup_task.take();
+        self.pending_input.clear();
+        let mut completed = self
+            .startup
+            .take()
+            .map(|startup| startup.cancel())
+            .unwrap_or_default();
+        if let Some(session) = &self.session {
+            session.shutdown();
+            completed.push(session.completed.clone());
+        }
+        completed
+    }
+
+    fn input_text(&mut self, text: String) {
+        if self.exited || self.error.is_some() {
+            return;
+        }
+        if let Some(session) = &self.session {
+            session.input(text.into_bytes());
+        } else {
+            self.pending_input.push(PendingInput::Text(text));
+        }
+    }
+
+    fn input_paste(&mut self, text: String) {
+        if self.exited || self.error.is_some() {
+            return;
+        }
+        if let Some(session) = &self.session {
+            let bracketed = session
+                .terminal
+                .lock()
+                .mode()
+                .contains(TermMode::BRACKETED_PASTE);
+            session.input(keys::paste(&text, bracketed));
+        } else {
+            self.pending_input.push(PendingInput::Paste(text));
+        }
+    }
+
+    fn input_key(&mut self, key: &Keystroke) -> bool {
+        let mode = self
+            .session
+            .as_ref()
+            .map(|s| *s.terminal.lock().mode())
+            .unwrap_or_default();
+        let win32_enter =
+            self.session.as_ref().is_some_and(Session::win32_input_mode) && key.key == "enter";
+        let bytes = if win32_enter {
+            keys::win32_enter(key, true)
+        } else {
+            keys::encode(key, mode)
+        };
+        let Some(bytes) = bytes else {
+            return false;
+        };
+        if !self.exited && self.error.is_none() {
+            if let Some(session) = &self.session {
+                session.input(bytes);
+                if win32_enter {
+                    self.win32_enter_pressed = true;
+                }
+            } else {
+                self.pending_input.push(PendingInput::KeyDown(key.clone()));
+            }
+        }
+        true
+    }
+
+    fn release_key(&mut self, key: &Keystroke) {
+        if key.key != "enter" {
+            return;
+        }
+        if self.session.is_none() && !self.exited && self.error.is_none() {
+            self.pending_input.push(PendingInput::KeyUp(key.clone()));
+        } else if self.win32_enter_pressed {
+            self.win32_enter_pressed = false;
+            if let Some(session) = &self.session
+                && !self.exited
+                && session.win32_input_mode()
+                && let Some(bytes) = keys::win32_enter(key, false)
+            {
+                session.write(bytes);
+            }
         }
     }
 
@@ -205,7 +392,9 @@ impl TerminalView {
             }
             Event::ColorRequest(i, f) => {
                 if let Some(s) = &self.session {
-                    let color = theme.terminal.rgb(i, s.terminal.lock().renderable_content().colors);
+                    let color = theme
+                        .terminal
+                        .rgb(i, s.terminal.lock().renderable_content().colors);
                     s.write(f(color).into_bytes());
                 }
             }
@@ -288,26 +477,18 @@ impl TerminalView {
         cx.notify();
     }
     pub fn paste(&mut self, cx: &mut Context<Self>) {
-        if let Some(s) = &self.session
-            && !self.exited
-            && let Some(text) = cx.read_from_clipboard().and_then(|i| i.text())
-        {
-            let bracketed = s.terminal.lock().mode().contains(TermMode::BRACKETED_PASTE);
-            s.input(keys::paste(&text, bracketed));
+        if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+            self.input_paste(text);
             cx.notify();
         }
     }
 
     fn drop_files(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(s) = self.session.as_ref().filter(|_| !self.exited) else {
-            return;
-        };
         let text = file_drop::paths_text(paths.paths(), &self.profile);
         if text.is_empty() {
             return;
         }
-        let bracketed = s.terminal.lock().mode().contains(TermMode::BRACKETED_PASTE);
-        s.input(keys::paste(&format!("{text} "), bracketed));
+        self.input_paste(format!("{text} "));
         self.selecting = false;
         self.cursor_on = true;
         self.focus.focus(window, cx);
@@ -391,23 +572,7 @@ impl TerminalView {
         if !self.preedit.is_empty() {
             return;
         }
-        let Some(s) = &self.session else {
-            return;
-        };
-        let mode = *s.terminal.lock().mode();
-        let win32_enter = s.win32_input_mode() && e.keystroke.key == "enter";
-        let bytes = if win32_enter {
-            keys::win32_enter(&e.keystroke, true)
-        } else {
-            keys::encode(&e.keystroke, mode)
-        };
-        if let Some(bytes) = bytes {
-            if !self.exited {
-                s.input(bytes);
-                if win32_enter {
-                    self.win32_enter_pressed = true;
-                }
-            }
+        if self.input_key(&e.keystroke) {
             self.cursor_on = true;
             cx.stop_propagation();
             cx.notify();
@@ -415,15 +580,8 @@ impl TerminalView {
     }
 
     fn key_up(&mut self, e: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if e.keystroke.key == "enter" && self.win32_enter_pressed {
-            self.win32_enter_pressed = false;
-            if let Some(s) = &self.session
-                && !self.exited
-                && s.win32_input_mode()
-                && let Some(bytes) = keys::win32_enter(&e.keystroke, false)
-            {
-                s.write(bytes);
-            }
+        if e.keystroke.key == "enter" && (self.win32_enter_pressed || self.startup.is_some()) {
+            self.release_key(&e.keystroke);
             cx.stop_propagation();
         }
     }
@@ -680,13 +838,14 @@ impl TerminalView {
             .floor()
             .clamp(2., 4096.) as usize;
         let rows = vertical.count;
+        self.grid_size = GridSize {
+            cols,
+            rows,
+            cell_width: self.cell_width.ceil() as u16,
+            cell_height: self.cell_height.ceil() as u16,
+        };
         if let Some(s) = &mut self.session {
-            s.resize(GridSize {
-                cols,
-                rows,
-                cell_width: self.cell_width.ceil() as u16,
-                cell_height: self.cell_height.ceil() as u16,
-            });
+            s.resize(self.grid_size);
         }
         let mut frame = Frame {
             quads: Vec::new(),
@@ -732,7 +891,9 @@ impl TerminalView {
                     px(row as f32 * self.cell_height),
                 );
             let wide = cell.flags.contains(Flags::WIDE_CHAR);
-            let mut fg = theme.terminal.color(cell.fg, &colors, cell.flags.contains(Flags::BOLD));
+            let mut fg = theme
+                .terminal
+                .color(cell.fg, &colors, cell.flags.contains(Flags::BOLD));
             let mut bg = theme.terminal.color(cell.bg, &colors, false);
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
@@ -779,7 +940,9 @@ impl TerminalView {
                         fg = theme.terminal.bg;
                     }
                 }
-                frame.quads.push(fill(bounds, theme.terminal.indexed(258, &colors)));
+                frame
+                    .quads
+                    .push(fill(bounds, theme.terminal.indexed(258, &colors)));
             }
             if p == cursor.point {
                 self.cursor_bounds =
@@ -955,11 +1118,7 @@ impl EntityInputHandler for TerminalView {
     ) {
         self.preedit.clear();
         self.preedit_selection = 0..0;
-        if !self.exited
-            && let Some(s) = &self.session
-        {
-            s.input(text.as_bytes().to_vec());
-        }
+        self.input_text(text.to_owned());
         self.cursor_on = true;
         window.notify_text_input_changed(&self.focus);
         cx.notify();
@@ -1075,6 +1234,20 @@ impl Render for TerminalView {
                     },
                 )
                 .size_full(),
+            )
+            .when(
+                self.session.is_none() && self.error.is_none() && !self.exited,
+                |view| {
+                    view.child(
+                        div()
+                            .absolute()
+                            .left(px(12.))
+                            .top(px(8.))
+                            .text_color(theme.terminal.fg)
+                            .text_size(px(13.))
+                            .child("셸 시작 중…"),
+                    )
+                },
             )
             .when_some(error, |view, error| {
                 view.child(

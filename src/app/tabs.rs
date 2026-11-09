@@ -286,11 +286,7 @@ impl TerminalApp {
             })
             .child(
                 div()
-                    .text_color(if bell {
-                        theme.bell
-                    } else {
-                        theme.accent
-                    })
+                    .text_color(if bell { theme.bell } else { theme.accent })
                     .flex()
                     .items_center()
                     .justify_center()

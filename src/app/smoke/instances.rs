@@ -83,13 +83,7 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
     launch(cx, Some(&cwd), false).await?;
     ensure!(tabs(&first, cx) == 3, "Explorer launch did not attach");
     let actual = first.root.upgrade().unwrap().read_with(cx, |app, cx| {
-        app.active_terminal()
-            .unwrap()
-            .read(cx)
-            .session
-            .as_ref()
-            .unwrap()
-            .working_directory()
+        app.active_terminal().unwrap().read(cx).working_directory()
     });
     ensure!(actual == cwd, "Explorer folder was changed: {actual:?}");
     launch(cx, None, true).await?;
@@ -225,12 +219,59 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
     let saved = SavedSession::load(dir)?;
     let snapshot = saved.windows[saved.active_window].clone();
     let expected = snapshot.tabs.len();
+    let expected_tabs = snapshot.tabs.clone();
+    let expected_active = snapshot.active;
     let restored =
         cx.update(|cx| windows::open(Startup::Restore(snapshot.clone()), snapshot, None, cx))?;
     ensure!(
         restored.read_with(cx, |app, _| app.tabs.len()) == expected,
         "multi-window tab restoration failed"
     );
+    restored.read_with(cx, |app, cx| {
+        ensure!(
+            app.active == expected_active,
+            "restore changed the selected tab"
+        );
+        ensure!(
+            app.tabs
+                .iter()
+                .all(|tab| tab.terminal.as_ref().unwrap().read(cx).session.is_none()),
+            "restoration blocked on shell creation"
+        );
+        let selected = app.tabs[app.active]
+            .terminal
+            .as_ref()
+            .unwrap()
+            .read(cx)
+            .startup_sequence()
+            .unwrap();
+        for (index, tab) in app.tabs.iter().enumerate() {
+            if index != app.active {
+                ensure!(
+                    tab.terminal
+                        .as_ref()
+                        .unwrap()
+                        .read(cx)
+                        .startup_sequence()
+                        .unwrap()
+                        > selected,
+                    "a background tab was enqueued before the selected tab"
+                );
+            }
+        }
+        let saved = app.snapshot(app.last_bounds, cx);
+        ensure!(
+            saved.tabs.len() == expected_tabs.len(),
+            "pending shells vanished from session snapshot"
+        );
+        for (actual, expected) in saved.tabs.iter().zip(&expected_tabs) {
+            ensure!(
+                actual.profile_id == expected.profile_id && actual.cwd == expected.cwd,
+                "pending restore changed tab order or working directory"
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })?;
     Ok(())
 }
 

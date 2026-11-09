@@ -12,14 +12,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod shortcuts;
 #[cfg(debug_assertions)]
 mod smoke;
 mod tabs;
-mod shortcuts;
 mod windows;
-use tabs::{TabDrag, TabMotion};
-use shortcuts::SettingsPage;
 use config::shortcuts::{self as keybindings, Bindings};
+use shortcuts::SettingsPage;
+use tabs::{TabDrag, TabMotion};
 
 struct Tab {
     id: u64,
@@ -86,6 +86,7 @@ pub struct TerminalApp {
     update_handoff: Option<crate::update::Handoff>,
     apply_update: bool,
     last_bounds: WindowBounds,
+    retiring_sessions: Vec<async_channel::Receiver<()>>,
 }
 
 impl TerminalApp {
@@ -136,7 +137,8 @@ impl TerminalApp {
                 if this.settings != settings {
                     this.settings = settings.clone();
                     this.draft = settings;
-                    this.shortcut_bindings = Bindings::new(&this.settings.keybindings).expect("validated settings");
+                    this.shortcut_bindings =
+                        Bindings::new(&this.settings.keybindings).expect("validated settings");
                     this.shortcut_capture = None;
                     this.font_input = cx.new(|cx| {
                         TextField::new(this.settings.font_family.clone(), "고정폭 글꼴", cx)
@@ -196,24 +198,36 @@ impl TerminalApp {
             update_handoff: None,
             apply_update: false,
             last_bounds: window.window_bounds(),
+            retiring_sessions: Vec::new(),
         };
         if let Startup::Directory(directory) = startup {
             this.add_terminal(this.default_profile(), Some(directory), window, cx);
         } else if let Startup::Restore(saved) = startup
             && this.settings.restore_session
         {
-            for tab in saved.tabs.into_iter().take(50) {
+            let active = saved.active;
+            let mut restored_active = 0;
+            for (index, tab) in saved.tabs.into_iter().take(50).enumerate() {
                 if let Some(profile) = this
                     .profiles
                     .iter()
                     .find(|p| p.id == tab.profile_id)
                     .cloned()
                 {
-                    this.add_terminal(profile, Some(tab.cwd), window, cx);
+                    if index <= active {
+                        restored_active = this.tabs.len();
+                    }
+                    this.create_terminal(profile, Some(tab.cwd), window, cx);
                 }
             }
             if !this.tabs.is_empty() {
-                this.activate(saved.active.min(this.tabs.len() - 1), window, cx);
+                // Preserve visual tab order, but enqueue the selected shell first.
+                this.activate(restored_active, window, cx);
+                for tab in &this.tabs {
+                    if let Some(terminal) = &tab.terminal {
+                        terminal.update(cx, |terminal, cx| terminal.start(false, cx));
+                    }
+                }
             }
         }
         if this.tabs.is_empty() {
@@ -254,6 +268,16 @@ impl TerminalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.create_terminal(profile, cwd, window, cx);
+        self.activate(self.tabs.len() - 1, window, cx);
+    }
+    fn create_terminal(
+        &mut self,
+        profile: Profile,
+        cwd: Option<PathBuf>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let id = self.next_id;
         self.next_id += 1;
         let terminal =
@@ -278,7 +302,6 @@ impl TerminalApp {
             _subscription: Some(subscription),
         });
         self.menu = false;
-        self.activate(self.tabs.len() - 1, window, cx);
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
@@ -290,6 +313,7 @@ impl TerminalApp {
         self.menu = false;
         self.tab_scroll.scroll_to_item(index);
         if let Some(terminal) = self.active_terminal() {
+            terminal.update(cx, |terminal, cx| terminal.start(true, cx));
             terminal.read(cx).focus.clone().focus(window, cx);
             window.set_window_title(&format!("{} — edolterm", terminal.read(cx).title));
         } else {
@@ -303,7 +327,13 @@ impl TerminalApp {
         let Some(index) = self.tabs.iter().position(|t| t.id == id) else {
             return;
         };
-        self.tabs.remove(index);
+        let removed = self.tabs.remove(index);
+        self.retiring_sessions
+            .retain(|r| r.is_empty() && !r.is_closed());
+        if let Some(terminal) = removed.terminal {
+            self.retiring_sessions
+                .extend(terminal.update(cx, |terminal, _| terminal.shutdown()));
+        }
         if self.tabs.is_empty() {
             self.close_window(window, cx);
             return;
@@ -351,7 +381,7 @@ impl TerminalApp {
             .tabs
             .iter()
             .filter_map(|t| t.terminal.as_ref())
-            .any(|t| !t.read(cx).exited && t.read(cx).session.is_some());
+            .any(|t| t.read(cx).is_running());
         let other_active = self.apply_update
             && cx.try_global::<windows::Windows>().is_some_and(|registry| {
                 registry
@@ -364,9 +394,7 @@ impl TerminalApp {
                                 .tabs
                                 .iter()
                                 .filter_map(|tab| tab.terminal.as_ref())
-                                .any(|terminal| {
-                                    !terminal.read(cx).exited && terminal.read(cx).session.is_some()
-                                })
+                                .any(|terminal| terminal.read(cx).is_running())
                         })
                     })
             });
@@ -388,10 +416,9 @@ impl TerminalApp {
             .iter()
             .filter_map(|tab| {
                 let t = tab.terminal.as_ref()?.read(cx);
-                let s = t.session.as_ref()?;
                 Some(SavedTab {
                     profile_id: t.profile.id.clone(),
-                    cwd: s.working_directory(),
+                    cwd: t.working_directory(),
                 })
             })
             .collect();
@@ -470,16 +497,13 @@ impl TerminalApp {
                     .update(cx, |app, window, cx| app.close_window(window, cx));
             }
         }
-        let receivers: Vec<_> = self
+        let mut receivers: Vec<_> = self
             .tabs
             .iter()
             .filter_map(|t| t.terminal.as_ref())
-            .filter_map(|t| t.read(cx).session.as_ref())
-            .map(|s| {
-                s.shutdown();
-                s.completed.clone()
-            })
+            .flat_map(|terminal| terminal.update(cx, |terminal, _| terminal.shutdown()))
             .collect();
+        receivers.append(&mut self.retiring_sessions);
         let handle = window.window_handle();
         cx.spawn(async move |_, cx| {
             let start = Instant::now();
@@ -558,7 +582,8 @@ impl TerminalApp {
         match self.draft.save(&self.dir) {
             Ok(()) => {
                 self.settings = self.draft.clone();
-                self.shortcut_bindings = Bindings::new(&self.settings.keybindings).expect("validated settings");
+                self.shortcut_bindings =
+                    Bindings::new(&self.settings.keybindings).expect("validated settings");
                 self.shortcut_capture = None;
                 cx.set_global(windows::SharedSettings(self.settings.clone()));
                 self.config_error = false;
@@ -581,7 +606,8 @@ impl TerminalApp {
                 cx.set_global(windows::SharedSettings(settings.clone()));
                 self.settings = settings.clone();
                 self.draft = settings;
-                self.shortcut_bindings = Bindings::new(&self.settings.keybindings).expect("validated settings");
+                self.shortcut_bindings =
+                    Bindings::new(&self.settings.keybindings).expect("validated settings");
                 self.shortcut_capture = None;
                 self.font_input = cx
                     .new(|cx| TextField::new(self.settings.font_family.clone(), "고정폭 글꼴", cx));
@@ -661,12 +687,19 @@ impl TerminalApp {
             cx.notify();
             return;
         }
-        if self.search_visible && self.search.read(cx).focus.is_focused(window)
-            && k.key == "enter" && m.shift
+        if self.search_visible
+            && self.search.read(cx).focus.is_focused(window)
+            && k.key == "enter"
+            && m.shift
         {
             self.find(true, true, cx);
-        } else if let Some(action) = self.shortcut_bindings.action(k, cx.keyboard_mapper().as_ref()) {
-            if !self.run_shortcut(action, window, cx) { return; }
+        } else if let Some(action) = self
+            .shortcut_bindings
+            .action(k, cx.keyboard_mapper().as_ref())
+        {
+            if !self.run_shortcut(action, window, cx) {
+                return;
+            }
         } else {
             return;
         }
@@ -852,7 +885,10 @@ impl TerminalApp {
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
-                    .tooltip(tip(format!("새 탭 · {}", self.shortcut_label(keybindings::Action::NewTab))))
+                    .tooltip(tip(format!(
+                        "새 탭 · {}",
+                        self.shortcut_label(keybindings::Action::NewTab)
+                    )))
                     .on_click(cx.listener(|this, _, window, cx| this.new_default(window, cx))),
             )
             .child(
@@ -861,7 +897,10 @@ impl TerminalApp {
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
-                    .tooltip(tip(format!("프로필 및 설정 · {}", self.shortcut_label(keybindings::Action::ProfileMenu))))
+                    .tooltip(tip(format!(
+                        "프로필 및 설정 · {}",
+                        self.shortcut_label(keybindings::Action::ProfileMenu)
+                    )))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.menu = !this.menu;
                         this.menu_index = 0;
@@ -1186,7 +1225,11 @@ impl TerminalApp {
                         .px_4()
                         .py_2()
                         .border_1()
-                        .border_color(if self.draft.theme == value { theme.accent } else { theme.border })
+                        .border_color(if self.draft.theme == value {
+                            theme.accent
+                        } else {
+                            theme.border
+                        })
                         .aria_selected(self.draft.theme == value)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.draft.theme = value.into();
@@ -1249,7 +1292,9 @@ impl TerminalApp {
                         button("reset-settings", "모두 기본값으로", theme)
                             .px_3()
                             .py_2()
-                            .on_click(cx.listener(|this, _, _, cx| this.reset_general_settings(cx))),
+                            .on_click(
+                                cx.listener(|this, _, _, cx| this.reset_general_settings(cx)),
+                            ),
                     )
                     .child(
                         button("save-settings", "설정 저장", theme)
@@ -1321,7 +1366,12 @@ fn toggle(id: &'static str, label: &'static str, enabled: bool, theme: Theme) ->
     .py_2()
     .child(label)
 }
-fn setting(label: &'static str, description: &'static str, theme: Theme, control: impl IntoElement) -> Div {
+fn setting(
+    label: &'static str,
+    description: &'static str,
+    theme: Theme,
+    control: impl IntoElement,
+) -> Div {
     div()
         .flex()
         .flex_col()
@@ -1361,7 +1411,8 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
             .text_color(foreground)
             .hover(move |s| {
                 if area == WindowControlArea::Close {
-                    s.bg(theme.window.close_hover.bg).text_color(theme.window.close_hover.fg)
+                    s.bg(theme.window.close_hover.bg)
+                        .text_color(theme.window.close_hover.fg)
                 } else {
                     s.bg(theme.hover).text_color(theme.fg)
                 }

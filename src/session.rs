@@ -25,6 +25,9 @@ mod input_modes;
 #[path = "session/working_directory.rs"]
 mod working_directory;
 
+#[path = "session/startup.rs"]
+pub mod startup;
+
 #[cfg(windows)]
 #[path = "session/windows_pty.rs"]
 pub(crate) mod windows_pty;

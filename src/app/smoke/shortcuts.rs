@@ -296,27 +296,34 @@ pub(super) async fn duplicate_tab(
             "duplicate changed profile"
         );
         ensure!(
-            duplicate
-                .read(cx)
-                .session
-                .as_ref()
-                .unwrap()
-                .working_directory()
-                == cwd,
+            duplicate.read(cx).working_directory() == cwd,
             "duplicate changed directory"
         );
-        duplicate
-            .read(cx)
-            .session
-            .as_ref()
-            .unwrap()
-            .input(b"[Console]::WriteLine(('DUP_CWD_' + $PWD.ProviderPath))\r".to_vec());
+        // Submit before the background startup can attach its result to the UI.
+        // This verifies that committed input survives the pending-session state.
+        ensure!(
+            duplicate.read(cx).session.is_none(),
+            "duplicate started synchronously"
+        );
+        duplicate.update(cx, |view, cx| {
+            view.replace_text_in_range(
+                None,
+                "[Console]::WriteLine(('DUP_CWD_' + $PWD.ProviderPath))\r",
+                window,
+                cx,
+            );
+        });
         Ok(duplicate)
     })??;
     let expected = format!("DUP_CWD_{}", cwd.display());
     let started = Instant::now();
     loop {
-        let text = duplicate.read_with(cx, |view, _| view.session.as_ref().unwrap().plain_text());
+        let text = duplicate.read_with(cx, |view, _| {
+            view.session
+                .as_ref()
+                .map(|s| s.plain_text())
+                .unwrap_or_default()
+        });
         if text.contains(&expected) {
             break;
         }
