@@ -162,6 +162,36 @@ pub fn open_file(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Windows Terminal's scrollUp/scrollDown defaults use the wheel-lines preference.
+pub fn keyboard_scroll_lines(screen_rows: usize) -> i32 {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SPI_GETWHEELSCROLLLINES, SystemParametersInfoW,
+        };
+        let mut lines = 3u32;
+        // SAFETY: SPI_GETWHEELSCROLLLINES writes one UINT into this valid pointer.
+        unsafe {
+            SystemParametersInfoW(
+                SPI_GETWHEELSCROLLLINES,
+                0,
+                (&mut lines as *mut u32).cast(),
+                0,
+            );
+        }
+        if lines == u32::MAX {
+            screen_rows.min(i32::MAX as usize) as i32
+        } else {
+            lines.min(i32::MAX as u32) as i32
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = screen_rows;
+        3
+    }
+}
+
 pub fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
     #[cfg(windows)]
     {

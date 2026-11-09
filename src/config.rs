@@ -5,6 +5,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+pub mod shortcuts;
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
@@ -18,6 +20,8 @@ pub struct Settings {
     pub allow_osc52: bool,
     pub windowing_behavior: WindowingBehavior,
     pub profiles: Vec<Profile>,
+    /// Per-action overrides. An empty list disables that action's shortcuts.
+    pub keybindings: BTreeMap<String, Vec<String>>,
 }
 
 impl Default for Settings {
@@ -38,6 +42,7 @@ impl Default for Settings {
             allow_osc52: false,
             windowing_behavior: WindowingBehavior::CurrentDesktop,
             profiles: Vec::new(),
+            keybindings: BTreeMap::new(),
         }
     }
 }
@@ -93,6 +98,7 @@ impl Profile {
 
 impl Settings {
     pub fn validate(&self) -> Result<()> {
+        shortcuts::Bindings::new(&self.keybindings)?;
         if !self.font_size.is_finite() || !(8. ..=48.).contains(&self.font_size) {
             bail!("글꼴 크기는 8–48이어야 합니다.");
         }

@@ -15,8 +15,11 @@ use std::{
 #[cfg(debug_assertions)]
 mod smoke;
 mod tabs;
+mod shortcuts;
 mod windows;
 use tabs::{TabDrag, TabMotion};
+use shortcuts::SettingsPage;
+use config::shortcuts::{self as keybindings, Bindings};
 
 struct Tab {
     id: u64,
@@ -73,6 +76,10 @@ pub struct TerminalApp {
     history_input: Entity<TextField>,
     _subscriptions: Vec<Subscription>,
     settings_scroll: ScrollHandle,
+    shortcuts_scroll: ScrollHandle,
+    settings_page: SettingsPage,
+    shortcut_capture: Option<(&'static str, Option<usize>)>,
+    shortcut_bindings: Bindings,
     update_state: crate::update::State,
     #[cfg(windows)]
     update_handoff: Option<crate::update::Handoff>,
@@ -123,6 +130,8 @@ impl TerminalApp {
                 if this.settings != settings {
                     this.settings = settings.clone();
                     this.draft = settings;
+                    this.shortcut_bindings = Bindings::new(&this.settings.keybindings).expect("validated settings");
+                    this.shortcut_capture = None;
                     this.font_input = cx.new(|cx| {
                         TextField::new(this.settings.font_family.clone(), "고정폭 글꼴", cx)
                     });
@@ -143,6 +152,7 @@ impl TerminalApp {
             }),
         ];
         let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
+        let shortcut_bindings = Bindings::new(&settings.keybindings).expect("validated settings");
         let mut this = Self {
             dir: dir.clone(),
             draft: settings.clone(),
@@ -169,6 +179,10 @@ impl TerminalApp {
             history_input,
             _subscriptions: subscriptions,
             settings_scroll: ScrollHandle::new(),
+            shortcuts_scroll: ScrollHandle::new(),
+            settings_page: SettingsPage::General,
+            shortcut_capture: None,
+            shortcut_bindings,
             update_state: crate::update::read_result(&dir)
                 .map(crate::update::State::Failed)
                 .unwrap_or_default(),
@@ -265,6 +279,7 @@ impl TerminalApp {
             return;
         }
         self.active = index;
+        self.shortcut_capture = None;
         self.search_visible = false;
         self.menu = false;
         self.tab_scroll.scroll_to_item(index);
@@ -504,6 +519,13 @@ impl TerminalApp {
         cx.notify();
     }
     fn save_settings(&mut self, cx: &mut Context<Self>) {
+        if let Err(error) = Bindings::new(&self.draft.keybindings)
+            .and_then(|bindings| bindings.validate_layout(cx.keyboard_mapper().as_ref()))
+        {
+            self.status = Some(error.to_string());
+            cx.notify();
+            return;
+        }
         self.draft.font_family = self.font_input.read(cx).text.trim().into();
         let history = self.history_input.read(cx).text.trim().parse();
         let Ok(history) = history else {
@@ -515,6 +537,8 @@ impl TerminalApp {
         match self.draft.save(&self.dir) {
             Ok(()) => {
                 self.settings = self.draft.clone();
+                self.shortcut_bindings = Bindings::new(&self.settings.keybindings).expect("validated settings");
+                self.shortcut_capture = None;
                 cx.set_global(windows::SharedSettings(self.settings.clone()));
                 self.config_error = false;
                 self.profiles =
@@ -536,6 +560,8 @@ impl TerminalApp {
                 cx.set_global(windows::SharedSettings(settings.clone()));
                 self.settings = settings.clone();
                 self.draft = settings;
+                self.shortcut_bindings = Bindings::new(&self.settings.keybindings).expect("validated settings");
+                self.shortcut_capture = None;
                 self.font_input = cx
                     .new(|cx| TextField::new(self.settings.font_family.clone(), "고정폭 글꼴", cx));
                 self.history_input =
@@ -569,6 +595,12 @@ impl TerminalApp {
             return;
         }
         if self.closing {
+            cx.stop_propagation();
+            return;
+        }
+        if self.shortcut_capture.is_some() && !self.confirm {
+            self.capture_shortcut(k, cx);
+            window.prevent_default();
             cx.stop_propagation();
             return;
         }
@@ -608,65 +640,12 @@ impl TerminalApp {
             cx.notify();
             return;
         }
-        let command = if cfg!(target_os = "macos") {
-            m.platform
-        } else {
-            m.control
-        };
-        if command && k.key == "," {
-            self.settings_tab(window, cx);
-        } else if command && k.key == "tab" && !self.tabs.is_empty() {
-            let n = self.tabs.len();
-            self.activate(
-                (self.active + if m.shift { n - 1 } else { 1 }) % n,
-                window,
-                cx,
-            );
-        } else if command && m.shift {
-            match k.key.as_str() {
-                "n" => {
-                    if let Err(error) = windows::open_default(cx) {
-                        self.status = Some(error.to_string());
-                    }
-                }
-                "t" => self.new_default(window, cx),
-                "w" => {
-                    if let Some(tab) = self.tabs.get(self.active) {
-                        self.close_tab(tab.id, window, cx);
-                    }
-                }
-                "c" => {
-                    if let Some(t) = self.active_terminal() {
-                        t.update(cx, |t, cx| t.copy(cx));
-                    }
-                }
-                "v" => {
-                    if let Some(t) = self.active_terminal() {
-                        t.update(cx, |t, cx| t.paste(cx));
-                    }
-                }
-                "f" => self.show_search(window, cx),
-                "p" => {
-                    self.menu = !self.menu;
-                    self.menu_index = 0;
-                    self.focus.focus(window, cx);
-                    cx.notify();
-                }
-                s => {
-                    if let Ok(n) = s.parse::<usize>()
-                        && let Some(p) =
-                            n.checked_sub(1).and_then(|n| self.profiles.get(n)).cloned()
-                    {
-                        self.add_terminal(p, None, window, cx);
-                    } else {
-                        return;
-                    }
-                }
-            }
-        } else if k.key == "f11" && m == Modifiers::default() {
-            window.toggle_fullscreen();
-        } else if self.search_visible && k.key == "enter" && m.shift {
+        if self.search_visible && self.search.read(cx).focus.is_focused(window)
+            && k.key == "enter" && m.shift
+        {
             self.find(true, true, cx);
+        } else if let Some(action) = self.shortcut_bindings.action(k, cx.keyboard_mapper().as_ref()) {
+            if !self.run_shortcut(action, window, cx) { return; }
         } else {
             return;
         }
@@ -852,7 +831,7 @@ impl TerminalApp {
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
-                    .tooltip(tip("새 탭 · Ctrl+Shift+T".into()))
+                    .tooltip(tip(format!("새 탭 · {}", self.shortcut_label(keybindings::Action::NewTab))))
                     .on_click(cx.listener(|this, _, window, cx| this.new_default(window, cx))),
             )
             .child(
@@ -861,7 +840,7 @@ impl TerminalApp {
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
-                    .tooltip(tip("프로필 및 설정 · Ctrl+Shift+P".into()))
+                    .tooltip(tip(format!("프로필 및 설정 · {}", self.shortcut_label(keybindings::Action::ProfileMenu))))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.menu = !this.menu;
                         this.menu_index = 0;
@@ -976,7 +955,7 @@ impl TerminalApp {
                             div()
                                 .text_size(px(11.))
                                 .text_color(theme.muted)
-                                .child(format!("Ctrl+Shift+{}", index + 1)),
+                                .child(self.shortcut_label(keybindings::Action::NewProfile(index))),
                         )
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -1007,7 +986,7 @@ impl TerminalApp {
                         div()
                             .text_size(px(11.))
                             .text_color(theme.muted)
-                            .child("Ctrl+,"),
+                            .child(self.shortcut_label(keybindings::Action::Settings)),
                     )
                     .on_click(cx.listener(|this, _, window, cx| this.settings_tab(window, cx))),
             )
@@ -1114,7 +1093,7 @@ impl TerminalApp {
         row.into_any_element()
     }
 
-    fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn general_settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::new(self.settings.theme == "light");
         let mut profiles = div().flex().flex_wrap().gap_2();
         for (index, p) in self.profiles.iter().enumerate() {
@@ -1179,13 +1158,6 @@ impl TerminalApp {
                     if let Err(e) = platform::open_file(&this.dir.join("settings.toml")) { this.status = Some(format!("{e:#}")); cx.notify(); }
                 })))
                 .child(button("reload-config", "다시 불러오기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx)))))
-            .child(div().h(px(1.)).bg(theme.border))
-            .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("단축키"))
-            .children([
-                ("새 탭 / 탭 닫기", "Ctrl+Shift+T / Ctrl+Shift+W"), ("새 창", "Ctrl+Shift+N"), ("다음 / 이전 탭", "Ctrl+Tab / Ctrl+Shift+Tab"),
-                ("복사 / 붙여넣기", "Ctrl+Shift+C / Ctrl+Shift+V"), ("찾기", "Ctrl+Shift+F"), ("프로필 메뉴 / 설정", "Ctrl+Shift+P / Ctrl+,"),
-                ("스크롤백 탐색", "Shift+PageUp / PageDown / Home / End"), ("전체 화면", "F11"),
-            ].map(|(label, keys)| div().flex().justify_between().gap_4().text_size(px(13.)).child(label).child(div().text_color(theme.muted).child(keys))))
             .child(div().flex().gap_2().pt_3().child(button("save-settings", "설정 저장", theme).px_5().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, _, cx| this.save_settings(cx)))))
             .child(self.update_view(theme, cx))
             .child(div().text_color(theme.muted).text_size(px(12.)).child(format!("edolterm {} · GPUI + alacritty_terminal", env!("CARGO_PKG_VERSION"))));

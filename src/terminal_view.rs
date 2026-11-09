@@ -356,25 +356,6 @@ impl TerminalView {
             return;
         };
         let mode = *s.terminal.lock().mode();
-        let m = e.keystroke.modifiers;
-        if m.shift
-            && !m.control
-            && matches!(
-                e.keystroke.key.as_str(),
-                "pageup" | "pagedown" | "home" | "end"
-            )
-        {
-            let scroll = match e.keystroke.key.as_str() {
-                "pageup" => Scroll::PageUp,
-                "pagedown" => Scroll::PageDown,
-                "home" => Scroll::Top,
-                _ => Scroll::Bottom,
-            };
-            s.terminal.lock().scroll_display(scroll);
-            cx.stop_propagation();
-            cx.notify();
-            return;
-        }
         let win32_enter = s.win32_input_mode() && e.keystroke.key == "enter";
         let bytes = if win32_enter {
             keys::win32_enter(&e.keystroke, true)

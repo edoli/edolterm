@@ -15,11 +15,13 @@ mod instances;
 mod scroll;
 #[cfg(feature = "ui-tests")]
 mod tabs;
+#[cfg(feature = "ui-tests")]
+mod shortcuts;
 
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" | "instances" | "keys" => mode,
+        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -114,6 +116,11 @@ pub fn start(
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
         if !output_ok && failure.is_none() { failure = Some("Unicode PTY output timed out".into()); }
+        #[cfg(feature = "ui-tests")]
+        if mode == "shortcuts" && failure.is_none() {
+            let result = handle.update(cx, |_, window, cx| shortcuts::run(&root, window, cx));
+            if let Err(e) = result.and_then(|r| r) { failure = Some(format!("{e:#}")); }
+        }
         #[cfg(all(feature = "ui-tests", windows))]
         if mode == "keys" && failure.is_none()
             && let Err(e) = keys::run(&root, handle, cx).await
@@ -200,6 +207,11 @@ pub fn start(
                         app.activate(0, window, cx);
                     }
                     "find" => {}
+                    "shortcuts" => {
+                        app.hide_search(window, cx);
+                        app.settings_tab(window, cx);
+                        app.settings_page = super::shortcuts::SettingsPage::Shortcuts;
+                    }
                     "confirm" => { app.hide_search(window, cx); app.should_close(window, cx); }
                     _ => app.hide_search(window, cx),
                 }
