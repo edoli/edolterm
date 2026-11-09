@@ -102,6 +102,9 @@ try {
     finally { $bitmap.Dispose() }
 }
 finally { $icon.Dispose() }
+# Sparse-package visual assets resolve relative to the external install location.
+# Keeping them only inside the MSIX leaves the running app with a blank taskbar icon.
+Copy-Item -LiteralPath (Join-Path $packageSource 'Assets') -Destination $payload -Recurse -Force
 $package = Join-Path $payload 'Edolterm.Explorer.msix'
 Invoke-Native (Join-Path $sdkBin 'makeappx.exe') @('pack', '/o', '/nv', '/d', $packageSource, '/p', $package)
 Invoke-Native (Join-Path $sdkBin 'signtool.exe') @('sign', '/fd', 'SHA256', '/s', 'My', '/sha1', $certificate.Thumbprint, $package)
