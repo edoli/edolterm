@@ -518,6 +518,21 @@ impl TerminalApp {
         }
         cx.notify();
     }
+    fn reset_general_settings(&mut self, cx: &mut Context<Self>) {
+        self.draft = Settings {
+            profiles: self.draft.profiles.clone(),
+            keybindings: self.draft.keybindings.clone(),
+            allow_osc52: self.draft.allow_osc52,
+            ..Settings::default()
+        };
+        self.font_input =
+            cx.new(|cx| TextField::new(self.draft.font_family.clone(), "고정폭 글꼴", cx));
+        self.history_input =
+            cx.new(|cx| TextField::new(self.draft.scrollback.to_string(), "10000", cx));
+        self.status = Some("일반 설정을 기본값으로 되돌렸습니다. 저장하면 적용됩니다.".into());
+        cx.notify();
+    }
+
     fn save_settings(&mut self, cx: &mut Context<Self>) {
         if let Err(error) = Bindings::new(&self.draft.keybindings)
             .and_then(|bindings| bindings.validate_layout(cx.keyboard_mapper().as_ref()))
@@ -1062,7 +1077,29 @@ impl TerminalApp {
             State::Ready => "준비 완료. 다시 시작하면 현재 셸이 종료됩니다.".into(),
             State::Failed(error) => format!("업데이트 실패: {error}"),
         };
-        let mut row = div().flex().flex_col().gap_2().child(label);
+        let mut row = div()
+            .flex()
+            .items_center()
+            .gap_3()
+            .min_w_0()
+            .text_size(px(12.))
+            .text_color(theme.muted)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .child(format!("edolterm {}", env!("CARGO_PKG_VERSION"))),
+            )
+            .child(
+                div()
+                    .id("update-status")
+                    .flex_1()
+                    .min_w_0()
+                    .whitespace_nowrap()
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .tooltip(tip(label.clone()))
+                    .child(label),
+            );
         if !self.update_state.is_busy() {
             row = row.child(
                 button("check-update", "업데이트 확인", theme)
@@ -1135,6 +1172,7 @@ impl TerminalApp {
                 }),
         );
         let content = div().flex().flex_col().gap_5().w_full().max_w(px(820.)).mx_auto().p_8()
+            .child(self.update_view(theme, cx))
             .child(div().text_size(px(25.)).font_weight(FontWeight::BOLD).child("설정"))
             .child(div().text_color(theme.muted).child("설정은 저장하면 열린 터미널에도 적용됩니다."))
             .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸", profiles))
@@ -1157,17 +1195,48 @@ impl TerminalApp {
                 .child(button("edit-config", "설정 파일 열기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| {
                     if let Err(e) = platform::open_file(&this.dir.join("settings.toml")) { this.status = Some(format!("{e:#}")); cx.notify(); }
                 })))
-                .child(button("reload-config", "다시 불러오기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx)))))
-            .child(div().flex().gap_2().pt_3().child(button("save-settings", "설정 저장", theme).px_5().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, _, cx| this.save_settings(cx)))))
-            .child(self.update_view(theme, cx))
-            .child(div().text_color(theme.muted).text_size(px(12.)).child(format!("edolterm {} · GPUI + alacritty_terminal", env!("CARGO_PKG_VERSION"))));
+                .child(button("reload-config", "다시 불러오기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx)))));
         div()
-            .id("settings-scroll")
+            .flex()
+            .flex_col()
             .flex_1()
+            .min_w_0()
             .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(&self.settings_scroll)
-            .child(content)
+            .child(
+                div()
+                    .id("settings-scroll")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.settings_scroll)
+                    .child(content),
+            )
+            .child(
+                div()
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .px_6()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(theme.border)
+                    .child(
+                        button("reset-settings", "모두 기본값으로", theme)
+                            .px_3()
+                            .py_2()
+                            .on_click(cx.listener(|this, _, _, cx| this.reset_general_settings(cx))),
+                    )
+                    .child(
+                        button("save-settings", "설정 저장", theme)
+                            .px_5()
+                            .py_2()
+                            .bg(theme.accent)
+                            .text_color(theme.bg)
+                            .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx))),
+                    ),
+            )
             .into_any_element()
     }
 }
