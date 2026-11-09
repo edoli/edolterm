@@ -46,6 +46,7 @@ pub struct TerminalView {
     scroll_lines: ScrollLines,
     last_mouse: Option<(usize, usize)>,
     cursor_on: bool,
+    win32_enter_pressed: bool,
     blink: Option<Task<()>>,
     _receiver: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -148,6 +149,7 @@ impl TerminalView {
             scroll_lines: ScrollLines::default(),
             last_mouse: None,
             cursor_on: true,
+            win32_enter_pressed: false,
             blink: None,
             _receiver: receiver,
             _subscriptions: subscriptions,
@@ -373,13 +375,36 @@ impl TerminalView {
             cx.notify();
             return;
         }
-        if let Some(bytes) = keys::encode(&e.keystroke, mode) {
+        let win32_enter = s.win32_input_mode() && e.keystroke.key == "enter";
+        let bytes = if win32_enter {
+            keys::win32_enter(&e.keystroke, true)
+        } else {
+            keys::encode(&e.keystroke, mode)
+        };
+        if let Some(bytes) = bytes {
             if !self.exited {
                 s.input(bytes);
+                if win32_enter {
+                    self.win32_enter_pressed = true;
+                }
             }
             self.cursor_on = true;
             cx.stop_propagation();
             cx.notify();
+        }
+    }
+
+    fn key_up(&mut self, e: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if e.keystroke.key == "enter" && self.win32_enter_pressed {
+            self.win32_enter_pressed = false;
+            if let Some(s) = &self.session
+                && !self.exited
+                && s.win32_input_mode()
+                && let Some(bytes) = keys::win32_enter(&e.keystroke, false)
+            {
+                s.write(bytes);
+            }
+            cx.stop_propagation();
         }
     }
 
@@ -932,6 +957,7 @@ impl Render for TerminalView {
             .overflow_hidden()
             .bg(Theme::new(self.settings.theme == "light").terminal_bg())
             .on_key_down(cx.listener(Self::key))
+            .on_key_up(cx.listener(Self::key_up))
             .on_drag_move(cx.listener(Self::file_drag_move))
             .on_drop(cx.listener(Self::drop_files))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))

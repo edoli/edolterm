@@ -1,10 +1,11 @@
 //! Shell-reported paths are independent of the terminal grid and UI.
 //! Observe OSC 9;9 and OSC 7 without consuming or modifying any PTY bytes.
+use super::input_modes::InputModes;
 use crate::config::Profile;
 use alacritty_terminal::{
     event::{OnResize, WindowSize},
     tty::{ChildEvent, EventedPty, EventedReadWrite},
-    vte::{Parser, Perform},
+    vte::{Params, Parser, Perform},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use polling::{Event, PollMode, Poller};
@@ -156,15 +157,35 @@ pub(super) fn shell_args(profile: &Profile, env: &mut HashMap<String, String>) -
 pub(super) struct TrackedPty<T> {
     inner: T,
     parser: Parser,
+    output: OutputState,
+}
+
+struct OutputState {
     cwd: WorkingDirectory,
+    input_modes: InputModes,
+}
+
+impl Perform for OutputState {
+    fn osc_dispatch(&mut self, params: &[&[u8]], terminated: bool) {
+        self.cwd.osc_dispatch(params, terminated);
+    }
+
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], ignore: bool, action: char) {
+        self.input_modes
+            .csi_dispatch(params, intermediates, ignore, action);
+    }
+
+    fn esc_dispatch(&mut self, intermediates: &[u8], ignore: bool, byte: u8) {
+        self.input_modes.esc_dispatch(intermediates, ignore, byte);
+    }
 }
 
 impl<T> TrackedPty<T> {
-    pub fn new(inner: T, cwd: WorkingDirectory) -> Self {
+    pub fn new(inner: T, cwd: WorkingDirectory, input_modes: InputModes) -> Self {
         Self {
             inner,
             parser: Parser::new(),
-            cwd,
+            output: OutputState { cwd, input_modes },
         }
     }
 }
@@ -172,7 +193,7 @@ impl<T> TrackedPty<T> {
 impl<T: EventedReadWrite> Read for TrackedPty<T> {
     fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
         let count = self.inner.reader().read(bytes)?;
-        self.parser.advance(&mut self.cwd, &bytes[..count]);
+        self.parser.advance(&mut self.output, &bytes[..count]);
         Ok(count)
     }
 }

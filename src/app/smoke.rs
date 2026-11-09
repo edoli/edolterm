@@ -8,6 +8,8 @@ use alacritty_terminal::{
 #[cfg(feature = "ui-tests")]
 mod file_drop;
 #[cfg(all(feature = "ui-tests", windows))]
+mod keys;
+#[cfg(all(feature = "ui-tests", windows))]
 mod instances;
 #[cfg(feature = "ui-tests")]
 mod scroll;
@@ -17,7 +19,7 @@ mod tabs;
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" | "instances" => mode,
+        | "scroll" | "drop" | "tabs" | "instances" | "keys" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -112,6 +114,12 @@ pub fn start(
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
         if !output_ok && failure.is_none() { failure = Some("Unicode PTY output timed out".into()); }
+        #[cfg(all(feature = "ui-tests", windows))]
+        if mode == "keys" && failure.is_none()
+            && let Err(e) = keys::run(&root, handle, cx).await
+        {
+            failure = Some(format!("{e:#}"));
+        }
         #[cfg(feature = "ui-tests")]
         if mode == "tabs" && failure.is_none() {
             let result = handle.update(cx, |_, window, cx| tabs::run(&root, window, cx));

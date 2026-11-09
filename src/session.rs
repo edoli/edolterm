@@ -20,6 +20,7 @@ use std::{
     },
 };
 
+mod input_modes;
 #[path = "session/working_directory.rs"]
 mod working_directory;
 
@@ -86,6 +87,7 @@ impl From<GridSize> for WindowSize {
 pub struct Session {
     pub terminal: Arc<FairMutex<Terminal>>,
     cwd: working_directory::WorkingDirectory,
+    input_modes: input_modes::InputModes,
     pub size: GridSize,
     pub pending: Arc<AtomicBool>,
     sender: EventLoopSender,
@@ -177,7 +179,8 @@ impl Session {
         let pty =
             pty.with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
         let cwd = working_directory::WorkingDirectory::new(cwd);
-        let pty = working_directory::TrackedPty::new(pty, cwd.clone());
+        let input_modes = input_modes::InputModes::default();
+        let pty = working_directory::TrackedPty::new(pty, cwd.clone(), input_modes.clone());
         let event_loop = EventLoop::new(terminal.clone(), proxy, pty, true, false)?;
         let sender = event_loop.channel();
         let io_thread = event_loop.spawn();
@@ -193,6 +196,7 @@ impl Session {
             Self {
                 terminal,
                 cwd,
+                input_modes,
                 size,
                 sender,
                 pending,
@@ -208,6 +212,10 @@ impl Session {
 
     pub fn working_directory(&self) -> PathBuf {
         self.cwd.get()
+    }
+
+    pub fn win32_input_mode(&self) -> bool {
+        self.input_modes.win32()
     }
 
     pub fn input(&self, bytes: impl Into<Vec<u8>>) {
