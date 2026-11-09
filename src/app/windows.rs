@@ -3,8 +3,7 @@ use super::*;
 use crate::instance::{Request, select_window};
 use std::collections::VecDeque;
 
-pub(super) struct SharedSettings(pub Settings);
-impl Global for SharedSettings {}
+pub(super) use crate::config::SharedSettings;
 
 #[derive(Clone)]
 pub(super) struct Entry {

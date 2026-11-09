@@ -302,17 +302,6 @@ impl TerminalApp {
 
     fn shortcuts_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::from_setting(&self.settings.theme, cx);
-        let light = Theme::is_light(&self.settings.theme, cx);
-        let remove_color = rgb(if light {
-            0xb65050
-        } else {
-            0xd49a9a
-        });
-        let remove_hover_color = rgb(if light {
-            0xa83d3d
-        } else {
-            0xffb4ab
-        });
         let mut rows = div().flex().flex_col().gap_1();
         let mut group = "";
         for (row, definition) in DEFINITIONS.iter().enumerate() {
@@ -386,10 +375,10 @@ impl TerminalApp {
                                 .h_full()
                                 .flex_shrink_0()
                                 .cursor_pointer()
-                                .bg(rgba(0xe5737310))
-                                .text_color(remove_color)
+                                .bg(theme.danger.normal.bg)
+                                .text_color(theme.danger.normal.fg)
                                 .hover(move |s| {
-                                    s.bg(rgba(0xe573732b)).text_color(remove_hover_color)
+                                    s.bg(theme.danger.hover.bg).text_color(theme.danger.hover.fg)
                                 })
                                 .child(icon(Icon::Trash, 14.))
                                 .on_click(cx.listener(move |this, _, _, cx| {

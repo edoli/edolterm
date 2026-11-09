@@ -35,13 +35,14 @@ enum Startup {
 
 struct Tip(String);
 impl Render for Tip {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Theme::current(cx).tooltip;
         div()
             .px_2()
             .py_1()
             .rounded_sm()
-            .bg(rgb(0x343b47))
-            .text_color(rgb(0xffffff))
+            .bg(colors.bg)
+            .text_color(colors.fg)
             .text_size(px(12.))
             .child(self.0.clone())
     }
@@ -125,9 +126,9 @@ impl TerminalApp {
             cx.observe_window_bounds(window, |this, window, _| {
                 this.last_bounds = window.window_bounds()
             }),
-            cx.observe_window_appearance(window, |this, _, cx| {
+            cx.observe_window_appearance(window, |this, window, _| {
                 if this.settings.theme == "system" {
-                    cx.notify();
+                    window.refresh();
                 }
             }),
             cx.observe_global::<windows::SharedSettings>(|this, cx| {
@@ -1197,15 +1198,15 @@ impl TerminalApp {
             .child(self.update_view(theme, cx))
             .child(div().text_size(px(25.)).font_weight(FontWeight::BOLD).child("설정"))
             .child(div().text_color(theme.muted).child("설정은 저장하면 열린 터미널에도 적용됩니다."))
-            .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸", profiles))
-            .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창 · 대상 창이 없으면 새 창 생성", behavior))
-            .child(setting("터미널 글꼴", "설치된 고정폭 글꼴 이름 · 한글과 이모지는 대체 글꼴 사용", self.font_input.clone()))
-            .child(setting("글꼴 크기", "8–48 px", div().flex().items_center().gap_3()
+            .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸", theme, profiles))
+            .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창 · 대상 창이 없으면 새 창 생성", theme, behavior))
+            .child(setting("터미널 글꼴", "설치된 고정폭 글꼴 이름 · 한글과 이모지는 대체 글꼴 사용", theme, self.font_input.clone()))
+            .child(setting("글꼴 크기", "8–48 px", theme, div().flex().items_center().gap_3()
                 .child(icon_button("font-smaller", Icon::Minus, "글꼴 크기 줄이기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size - 1.).max(8.); cx.notify(); })))
                 .child(format!("{} px", self.draft.font_size))
                 .child(icon_button("font-larger", Icon::Plus, "글꼴 크기 늘리기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size + 1.).min(48.); cx.notify(); })))))
-            .child(setting("스크롤백", "탭당 보관할 줄 수 · 최대 1,000,000줄", self.history_input.clone()))
-            .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", themes))
+            .child(setting("스크롤백", "탭당 보관할 줄 수 · 최대 1,000,000줄", theme, self.history_input.clone()))
+            .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", theme, themes))
             .child(toggle("confirm-close", "창을 닫을 때 열린 세션 확인", self.draft.confirm_close, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.confirm_close = !this.draft.confirm_close; cx.notify(); })))
             .child(toggle("restore-session", "다음 실행 시 탭과 시작 폴더 복원", self.draft.restore_session, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.restore_session = !this.draft.restore_session; cx.notify(); })))
             .child(div().text_size(px(12.)).text_color(theme.muted).child("복원할 때 셸은 새로 실행됩니다. 실행 중인 명령과 출력은 복원되지 않습니다."))
@@ -1320,7 +1321,7 @@ fn toggle(id: &'static str, label: &'static str, enabled: bool, theme: Theme) ->
     .py_2()
     .child(label)
 }
-fn setting(label: &'static str, description: &'static str, control: impl IntoElement) -> Div {
+fn setting(label: &'static str, description: &'static str, theme: Theme, control: impl IntoElement) -> Div {
     div()
         .flex()
         .flex_col()
@@ -1329,7 +1330,7 @@ fn setting(label: &'static str, description: &'static str, control: impl IntoEle
         .child(
             div()
                 .text_size(px(12.))
-                .text_color(rgb(0x929baa))
+                .text_color(theme.description)
                 .child(description),
         )
         .child(control)
@@ -1340,7 +1341,7 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
     let foreground = if window.is_window_active() {
         theme.fg
     } else {
-        theme.fg.opacity(0.4)
+        theme.window.inactive_fg
     };
     let button = |id, area, symbol, label: &'static str| {
         div()
@@ -1360,7 +1361,7 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
             .text_color(foreground)
             .hover(move |s| {
                 if area == WindowControlArea::Close {
-                    s.bg(rgb(0xc42b1c)).text_color(rgb(0xffffff))
+                    s.bg(theme.window.close_hover.bg).text_color(theme.window.close_hover.fg)
                 } else {
                     s.bg(theme.hover).text_color(theme.fg)
                 }
@@ -1510,7 +1511,7 @@ impl Render for TerminalApp {
         }
         if self.confirm || self.closing {
             let closing = self.closing;
-            root = root.child(div().absolute().inset_0().flex().items_center().justify_center().bg(rgba(0x00000088))
+            root = root.child(div().absolute().inset_0().flex().items_center().justify_center().bg(theme.overlay)
                 .child(div().flex().flex_col().gap_4().w(px(420.)).p_6().rounded_lg().bg(theme.panel).border_1().border_color(theme.border).shadow_lg()
                     .child(div().text_size(px(18.)).font_weight(FontWeight::BOLD).child(if closing { "터미널 종료 중…" } else { "열린 터미널을 종료할까요?" }))
                     .child(if closing { "셸과 터미널 연결을 정리하고 있습니다." } else if self.apply_update { "업데이트를 위해 모든 창의 명령을 종료합니다. 다시 시작하면 창과 탭을 복원합니다." } else { "실행 중인 명령이 함께 종료됩니다. 다음 실행 시 셸은 새로 시작됩니다." })

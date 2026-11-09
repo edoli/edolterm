@@ -287,7 +287,7 @@ impl TerminalApp {
             .child(
                 div()
                     .text_color(if bell {
-                        rgb(0xe5c07b).into()
+                        theme.bell
                     } else {
                         theme.accent
                     })

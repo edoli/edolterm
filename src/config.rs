@@ -5,7 +5,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "config/shortcuts.rs"]
 pub mod shortcuts;
+
+pub struct SharedSettings(pub Settings);
+impl gpui::Global for SharedSettings {}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]

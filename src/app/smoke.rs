@@ -273,6 +273,20 @@ pub fn start(
             cx.background_executor().timer(Duration::from_millis(300)).await;
             let _ = handle.update(cx, |_, window, cx| {
                 // Hidden test windows do not receive presentation ticks from DWM.
+                if matches!(mode.as_str(), "settings" | "shortcuts") {
+                    for theme in ["light", "dark", "system"] {
+                        root.update(cx, |app, cx| {
+                            app.draft.theme = theme.into();
+                            app.save_settings(cx);
+                            assert_eq!(Settings::load(&app.dir).unwrap().theme, theme);
+                            app.status = None;
+                        });
+                        window.refresh();
+                        window.draw(cx).clear(cx);
+                        let path = root.read(cx).dir.join(format!("theme-{theme}.png"));
+                        window.render_to_image().unwrap().save(path).unwrap();
+                    }
+                }
                 window.refresh();
                 window.draw(cx).clear(cx);
                 let path = root.read(cx).dir.join("screenshot.png");

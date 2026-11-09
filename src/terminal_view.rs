@@ -205,7 +205,7 @@ impl TerminalView {
             }
             Event::ColorRequest(i, f) => {
                 if let Some(s) = &self.session {
-                    let color = theme.rgb(i, s.terminal.lock().renderable_content().colors);
+                    let color = theme.terminal.rgb(i, s.terminal.lock().renderable_content().colors);
                     s.write(f(color).into_bytes());
                 }
             }
@@ -660,7 +660,7 @@ impl TerminalView {
         let run = TextRun {
             len: 1,
             font: font.clone(),
-            color: theme.terminal_fg(),
+            color: theme.terminal.fg,
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -732,23 +732,23 @@ impl TerminalView {
                     px(row as f32 * self.cell_height),
                 );
             let wide = cell.flags.contains(Flags::WIDE_CHAR);
-            let mut fg = theme.color(cell.fg, &colors, cell.flags.contains(Flags::BOLD));
-            let mut bg = theme.color(cell.bg, &colors, false);
+            let mut fg = theme.terminal.color(cell.fg, &colors, cell.flags.contains(Flags::BOLD));
+            let mut bg = theme.terminal.color(cell.bg, &colors, false);
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
             if selection.is_some_and(|s| s.contains(p)) {
-                bg = theme.terminal_selection();
+                bg = theme.terminal.selection;
             }
             if self.search_match.as_ref().is_some_and(|r| r.contains(&p)) {
-                bg = rgb(0x886629).into();
-                fg = rgb(0xffffff).into();
+                bg = theme.terminal.search_match.bg;
+                fg = theme.terminal.search_match.fg;
             }
             if cell.flags.contains(Flags::DIM) {
-                fg = fg.opacity(0.6);
+                fg = fg.opacity(theme.terminal.dim_opacity);
             }
             let rect = Bounds::new(pos, gpui::size(px(self.cell_width), px(self.cell_height)));
-            if bg != theme.terminal_bg() {
+            if bg != theme.terminal.bg {
                 frame.quads.push(fill(rect, bg));
             }
             if cell.flags.intersects(
@@ -776,10 +776,10 @@ impl TerminalView {
                         bounds.size.height = px(2.);
                     }
                     _ => {
-                        fg = theme.terminal_bg();
+                        fg = theme.terminal.bg;
                     }
                 }
-                frame.quads.push(fill(bounds, theme.indexed(258, &colors)));
+                frame.quads.push(fill(bounds, theme.terminal.indexed(258, &colors)));
             }
             if p == cursor.point {
                 self.cursor_bounds =
@@ -859,7 +859,7 @@ impl TerminalView {
             let run = TextRun {
                 len: self.preedit.len(),
                 font,
-                color: theme.terminal_fg(),
+                color: theme.terminal.fg,
                 background_color: Some(theme.panel),
                 underline: Some(UnderlineStyle {
                     color: Some(theme.accent),
@@ -884,7 +884,7 @@ impl TerminalView {
                     point(bounds.right() - px(7.), bounds.top() + px(y)),
                     gpui::size(px(3.), px(height)),
                 ),
-                theme.muted.opacity(0.45),
+                theme.scrollbar,
             ));
         }
         if self.cursor_bounds != old_cursor_bounds && self.focus.is_focused(window) {
@@ -1010,6 +1010,7 @@ impl EntityInputHandler for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let a = cx.entity();
         let b = a.clone();
         let error = self.error.clone();
@@ -1024,7 +1025,7 @@ impl Render for TerminalView {
             .when(over_link, |view| view.cursor_pointer())
             .on_hover(cx.listener(|_, _, _, cx| cx.notify()))
             .overflow_hidden()
-            .bg(Theme::from_setting(&self.settings.theme, cx).terminal_bg())
+            .bg(theme.terminal.bg)
             .on_key_down(cx.listener(Self::key))
             .on_key_up(cx.listener(Self::key_up))
             .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
@@ -1084,8 +1085,8 @@ impl Render for TerminalView {
                         .bottom(px(12.))
                         .p_3()
                         .rounded_md()
-                        .bg(rgb(0x48282c))
-                        .text_color(rgb(0xffb4bc))
+                        .bg(theme.error.bg)
+                        .text_color(theme.error.fg)
                         .text_size(px(13.))
                         .child(error),
                 )

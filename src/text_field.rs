@@ -1,3 +1,4 @@
+use crate::{config::SharedSettings, theme::Theme};
 use gpui::{prelude::*, *};
 use std::ops::Range;
 use unicode_segmentation::UnicodeSegmentation;
@@ -16,6 +17,7 @@ pub struct TextField {
     marked: Option<Range<usize>>,
     layout: Option<ShapedLine>,
     bounds: Bounds<Pixels>,
+    _theme_subscription: Subscription,
 }
 impl EventEmitter<FieldEvent> for TextField {}
 
@@ -42,6 +44,7 @@ impl TextField {
             marked: None,
             layout: None,
             bounds: Bounds::default(),
+            _theme_subscription: cx.observe_global::<SharedSettings>(|_, cx| cx.notify()),
         }
     }
     fn range(&self, r: Range<usize>) -> Range<usize> {
@@ -224,6 +227,7 @@ impl EntityInputHandler for TextField {
 
 impl Render for TextField {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let colors = Theme::current(cx).input;
         let a = cx.entity();
         let b = a.clone();
         div()
@@ -239,10 +243,10 @@ impl Render for TextField {
             .px_2()
             .py_1()
             .border_1()
-            .border_color(rgb(0x4a5362))
+            .border_color(colors.border)
             .rounded_sm()
-            .bg(rgb(0x171b22))
-            .text_color(rgb(0xd9dce3))
+            .bg(colors.surface.bg)
+            .text_color(colors.surface.fg)
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(
                 MouseButton::Left,
@@ -277,9 +281,9 @@ impl Render for TextField {
                             len: text.len(),
                             font: font(".SystemUIFont"),
                             color: if empty {
-                                rgb(0x7e8999).into()
+                                colors.placeholder
                             } else {
-                                rgb(0xd9dce3).into()
+                                colors.surface.fg
                             },
                             background_color: None,
                             underline: None,
@@ -305,7 +309,7 @@ impl Render for TextField {
                                         bounds.size.height,
                                     ),
                                 ),
-                                rgb(0x334d71),
+                                colors.selection,
                             ));
                         }
                         let _ = line.paint(
@@ -322,7 +326,7 @@ impl Render for TextField {
                                     origin + point(line.x_for_index(cursor), px(0.)),
                                     size(px(1.), bounds.size.height),
                                 ),
-                                rgb(0x85b6ff),
+                                colors.cursor,
                             ));
                             window.handle_input(
                                 &focus,

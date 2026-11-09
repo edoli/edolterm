@@ -20,6 +20,7 @@ use std::{
     },
 };
 
+#[path = "session/input_modes.rs"]
 mod input_modes;
 #[path = "session/working_directory.rs"]
 mod working_directory;
@@ -453,7 +454,7 @@ mod tests {
                     Event::Wakeup => session.pending.store(false, Ordering::Release),
                     Event::ColorRequest(i, f) => {
                         color_requests.push(i);
-                        let color = crate::theme::Theme::new(false)
+                        let color = crate::theme::TerminalTheme::default()
                             .rgb(i, session.terminal.lock().renderable_content().colors);
                         session.write(f(color).into_bytes());
                     }
@@ -497,9 +498,9 @@ mod tests {
                 let cell = &term.grid()[Point::new(Line(row), Column(col))];
                 let actual = match cell.bg {
                     Color::Spec(rgb) => rgb,
-                    Color::Indexed(i) => crate::theme::Theme::new(false)
+                    Color::Indexed(i) => crate::theme::TerminalTheme::default()
                         .rgb(i as usize, term.renderable_content().colors),
-                    Color::Named(i) => crate::theme::Theme::new(false)
+                    Color::Named(i) => crate::theme::TerminalTheme::default()
                         .rgb(i as usize, term.renderable_content().colors),
                 };
                 assert_eq!(actual, expected, "background for {marker} column {col}");

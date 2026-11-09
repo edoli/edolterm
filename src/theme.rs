@@ -1,8 +1,11 @@
+//! UI palettes and terminal colors live here. Views use named color roles;
+//! reusable widgets use `Theme::current` to follow the saved theme preference.
+use crate::config::{Settings, SharedSettings};
 use alacritty_terminal::{
     term::color::Colors,
     vte::ansi::{Color, Rgb},
 };
-use gpui::{App, Hsla, WindowAppearance, rgb};
+use gpui::{App, Hsla, WindowAppearance, rgb, rgba};
 
 // Windows Terminal's Campbell scheme, in ANSI order (not Windows console order).
 const CAMPBELL: [usize; 16] = [
@@ -10,6 +13,35 @@ const CAMPBELL: [usize; 16] = [
     0xe74856, 0x16c60c, 0xf9f1a5, 0x3b78ff, 0xb4009e, 0x61d6d6, 0xf2f2f2,
 ];
 
+/// Colors for a surface and the text displayed on it.
+#[derive(Clone, Copy)]
+pub struct SurfaceColors {
+    pub bg: Hsla,
+    pub fg: Hsla,
+}
+
+#[derive(Clone, Copy)]
+pub struct InputColors {
+    pub surface: SurfaceColors,
+    pub border: Hsla,
+    pub placeholder: Hsla,
+    pub selection: Hsla,
+    pub cursor: Hsla,
+}
+
+#[derive(Clone, Copy)]
+pub struct InteractiveColors {
+    pub normal: SurfaceColors,
+    pub hover: SurfaceColors,
+}
+
+#[derive(Clone, Copy)]
+pub struct WindowColors {
+    pub inactive_fg: Hsla,
+    pub close_hover: SurfaceColors,
+}
+
+/// Application colors. Define all light/dark UI colors here, not in views.
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub bg: Hsla,
@@ -20,9 +52,27 @@ pub struct Theme {
     pub muted: Hsla,
     pub hover: Hsla,
     pub accent: Hsla,
+    pub description: Hsla,
+    pub bell: Hsla,
+    pub overlay: Hsla,
+    pub scrollbar: Hsla,
+    pub input: InputColors,
+    pub tooltip: SurfaceColors,
+    pub danger: InteractiveColors,
+    pub window: WindowColors,
+    pub error: SurfaceColors,
+    pub terminal: TerminalTheme,
 }
+
 impl Theme {
-    pub fn is_light(setting: &str, cx: &App) -> bool {
+    pub fn current(cx: &App) -> Self {
+        match cx.try_global::<SharedSettings>() {
+            Some(settings) => Self::from_setting(&settings.0.theme, cx),
+            None => Self::from_setting(&Settings::default().theme, cx),
+        }
+    }
+
+    fn is_light(setting: &str, cx: &App) -> bool {
         match setting {
             "system" => matches!(
                 cx.window_appearance(),
@@ -38,6 +88,56 @@ impl Theme {
     }
 
     pub fn new(light: bool) -> Self {
+        let dark = Self {
+            bg: rgb(0x0c0c0c).into(),
+            fg: rgb(0xcccccc).into(),
+            bar: rgb(0x2b2b2b).into(),
+            panel: rgb(0x2c2c2c).into(),
+            border: rgb(0x404040).into(),
+            muted: rgb(0xb0b0b0).into(),
+            hover: rgb(0x3c3c3c).into(),
+            accent: rgb(0x85b6ff).into(),
+            description: rgb(0x929baa).into(),
+            bell: rgb(0xe5c07b).into(),
+            overlay: rgba(0x00000088).into(),
+            scrollbar: Hsla::from(rgb(0xb0b0b0)).opacity(0.45),
+            input: InputColors {
+                surface: SurfaceColors {
+                    bg: rgb(0x171b22).into(),
+                    fg: rgb(0xd9dce3).into(),
+                },
+                border: rgb(0x4a5362).into(),
+                placeholder: rgb(0x7e8999).into(),
+                selection: rgb(0x334d71).into(),
+                cursor: rgb(0x85b6ff).into(),
+            },
+            tooltip: SurfaceColors {
+                bg: rgb(0x343b47).into(),
+                fg: rgb(0xffffff).into(),
+            },
+            danger: InteractiveColors {
+                normal: SurfaceColors {
+                    bg: rgba(0xe5737310).into(),
+                    fg: rgb(0xd49a9a).into(),
+                },
+                hover: SurfaceColors {
+                    bg: rgba(0xe573732b).into(),
+                    fg: rgb(0xffb4ab).into(),
+                },
+            },
+            window: WindowColors {
+                inactive_fg: Hsla::from(rgb(0xcccccc)).opacity(0.4),
+                close_hover: SurfaceColors {
+                    bg: rgb(0xc42b1c).into(),
+                    fg: rgb(0xffffff).into(),
+                },
+            },
+            error: SurfaceColors {
+                bg: rgb(0x48282c).into(),
+                fg: rgb(0xffb4bc).into(),
+            },
+            terminal: TerminalTheme::default(),
+        };
         if light {
             Self {
                 bg: rgb(0xfafafa).into(),
@@ -48,30 +148,74 @@ impl Theme {
                 muted: rgb(0x5d6572).into(),
                 hover: rgb(0xdce0e7).into(),
                 accent: rgb(0x3469bc).into(),
+                description: rgb(0x5d6572).into(),
+                scrollbar: Hsla::from(rgb(0x5d6572)).opacity(0.45),
+                input: InputColors {
+                    surface: SurfaceColors {
+                        bg: rgb(0xffffff).into(),
+                        fg: rgb(0x202124).into(),
+                    },
+                    border: rgb(0xd0d3d8).into(),
+                    placeholder: rgb(0x5d6572).into(),
+                    selection: rgb(0xdce0e7).into(),
+                    cursor: rgb(0x3469bc).into(),
+                },
+                tooltip: SurfaceColors {
+                    bg: rgb(0xe9eaed).into(),
+                    fg: rgb(0x202124).into(),
+                },
+                danger: InteractiveColors {
+                    normal: SurfaceColors {
+                        fg: rgb(0xb65050).into(),
+                        ..dark.danger.normal
+                    },
+                    hover: SurfaceColors {
+                        fg: rgb(0xa83d3d).into(),
+                        ..dark.danger.hover
+                    },
+                },
+                window: WindowColors {
+                    inactive_fg: Hsla::from(rgb(0x202124)).opacity(0.4),
+                    ..dark.window
+                },
+                error: SurfaceColors {
+                    bg: rgb(0xfce8e6).into(),
+                    fg: rgb(0xa62b36).into(),
+                },
+                ..dark
             }
         } else {
-            Self {
-                bg: rgb(0x0c0c0c).into(),
-                fg: rgb(0xcccccc).into(),
-                bar: rgb(0x2b2b2b).into(),
-                panel: rgb(0x2c2c2c).into(),
-                border: rgb(0x404040).into(),
-                muted: rgb(0xb0b0b0).into(),
-                hover: rgb(0x3c3c3c).into(),
-                accent: rgb(0x85b6ff).into(),
-            }
+            dark
         }
     }
-    // The terminal scheme is independent of the application's light/dark chrome.
-    pub fn terminal_bg(self) -> Hsla {
-        rgb(0x0c0c0c).into()
+}
+
+/// The terminal scheme is independent of the application's light/dark chrome.
+#[derive(Clone, Copy)]
+pub struct TerminalTheme {
+    pub bg: Hsla,
+    pub fg: Hsla,
+    pub selection: Hsla,
+    pub search_match: SurfaceColors,
+    pub dim_opacity: f32,
+}
+
+impl Default for TerminalTheme {
+    fn default() -> Self {
+        Self {
+            bg: rgb(0x0c0c0c).into(),
+            fg: rgb(0xcccccc).into(),
+            selection: rgb(0x404040).into(),
+            search_match: SurfaceColors {
+                bg: rgb(0x886629).into(),
+                fg: rgb(0xffffff).into(),
+            },
+            dim_opacity: 0.6,
+        }
     }
-    pub fn terminal_fg(self) -> Hsla {
-        rgb(0xcccccc).into()
-    }
-    pub fn terminal_selection(self) -> Hsla {
-        rgb(0x404040).into()
-    }
+}
+
+impl TerminalTheme {
     pub fn color(&self, color: Color, overrides: &Colors, bold: bool) -> Hsla {
         match color {
             Color::Spec(c) => {
