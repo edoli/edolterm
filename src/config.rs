@@ -16,6 +16,7 @@ pub struct Settings {
     pub confirm_close: bool,
     pub restore_session: bool,
     pub allow_osc52: bool,
+    pub windowing_behavior: WindowingBehavior,
     pub profiles: Vec<Profile>,
 }
 
@@ -35,7 +36,31 @@ impl Default for Settings {
             confirm_close: true,
             restore_session: true,
             allow_osc52: false,
+            windowing_behavior: WindowingBehavior::CurrentDesktop,
             profiles: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum WindowingBehavior {
+    #[serde(rename = "useNew")]
+    NewWindow,
+    #[default]
+    #[serde(rename = "useExisting")]
+    CurrentDesktop,
+    #[serde(rename = "useAnyExisting")]
+    AnyDesktop,
+}
+
+impl WindowingBehavior {
+    pub const ALL: [Self; 3] = [Self::NewWindow, Self::AnyDesktop, Self::CurrentDesktop];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::NewWindow => "새 창 만들기",
+            Self::AnyDesktop => "가장 최근에 사용한 창에 첨부",
+            Self::CurrentDesktop => "이 데스크톱에서 가장 최근에 사용한 창에 첨부",
         }
     }
 }
@@ -166,6 +191,10 @@ pub struct SavedSession {
     pub width: f32,
     pub height: f32,
     pub maximized: bool,
+    /// Per-window snapshots have an empty `windows` array; old files remain readable.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<SavedSession>,
+    pub active_window: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -190,6 +219,49 @@ impl SavedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_settings_default_to_current_desktop_and_all_modes_round_trip() {
+        let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
+        assert_eq!(legacy.windowing_behavior, WindowingBehavior::CurrentDesktop);
+        for mode in WindowingBehavior::ALL {
+            let settings = Settings {
+                windowing_behavior: mode,
+                ..Settings::default()
+            };
+            let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(settings, parsed);
+        }
+        assert!(toml::from_str::<Settings>("windowing_behavior = 'unknown'").is_err());
+    }
+
+    #[test]
+    fn legacy_sessions_and_multiple_windows_round_trip() {
+        let legacy: SavedSession =
+            serde_json::from_str(r#"{"tabs":[],"width":1200,"height":800,"active":0}"#).unwrap();
+        assert!(legacy.windows.is_empty());
+        let session = SavedSession {
+            windows: vec![
+                legacy.clone(),
+                SavedSession {
+                    width: 900.,
+                    ..legacy.clone()
+                },
+            ],
+            active_window: 1,
+            ..legacy
+        };
+        let parsed: SavedSession =
+            serde_json::from_slice(&serde_json::to_vec(&session).unwrap()).unwrap();
+        assert_eq!(parsed.windows.len(), 2);
+        assert_eq!(parsed.windows[1].width, 900.);
+        assert_eq!(parsed.active_window, 1);
+        assert!(
+            parsed
+                .windows
+                .iter()
+                .all(|window| window.windows.is_empty())
+        );
+    }
     #[test]
     fn settings_round_trip_and_validation() {
         let mut settings = Settings::default();

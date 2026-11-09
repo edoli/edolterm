@@ -7,6 +7,8 @@ use alacritty_terminal::{
 
 #[cfg(feature = "ui-tests")]
 mod file_drop;
+#[cfg(all(feature = "ui-tests", windows))]
+mod instances;
 #[cfg(feature = "ui-tests")]
 mod scroll;
 #[cfg(feature = "ui-tests")]
@@ -15,7 +17,7 @@ mod tabs;
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" => mode,
+        | "scroll" | "drop" | "tabs" | "instances" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -24,7 +26,18 @@ pub fn directory(mode: &str) -> PathBuf {
         .join(mode)
 }
 
-pub fn start(root: Entity<TerminalApp>, mode: String, requested_directory: Option<PathBuf>, window: &mut Window, cx: &mut App) {
+pub fn start(
+    root: Entity<TerminalApp>,
+    mode: String,
+    requested_directory: Option<PathBuf>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    #[cfg(all(feature = "ui-tests", windows))]
+    if mode == "instances" {
+        instances::start(root, cx);
+        return;
+    }
     let handle = window.window_handle();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_millis(800)).await;

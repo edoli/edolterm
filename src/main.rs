@@ -3,6 +3,7 @@ mod app;
 mod cli;
 mod config;
 mod icons;
+mod instance;
 mod keys;
 mod platform;
 mod session;

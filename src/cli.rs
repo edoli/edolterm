@@ -4,6 +4,7 @@ use std::{ffi::OsString, path::PathBuf};
 #[derive(Default)]
 pub struct Options {
     pub working_directory: Option<PathBuf>,
+    pub new_window: bool,
     #[cfg(debug_assertions)]
     pub smoke_mode: Option<String>,
 }
@@ -13,6 +14,10 @@ impl Options {
         let mut options = Self::default();
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
+            if arg == "--new-window" {
+                options.new_window = true;
+                continue;
+            }
             let directory = if arg == "--working-directory" || arg == "-d" {
                 args.next()
                     .context("--working-directory 뒤에 폴더 경로를 지정하세요.")?
@@ -51,6 +56,14 @@ mod tests {
 
     fn parse(args: &[&str]) -> Result<Options> {
         Options::parse(args.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn explicit_new_window_can_be_combined_with_directory() {
+        let options = parse(&["--new-window", "-d", "."]).unwrap();
+        assert!(options.new_window);
+        assert!(options.working_directory.is_some());
+        assert!(!parse(&[]).unwrap().new_window);
     }
 
     #[test]

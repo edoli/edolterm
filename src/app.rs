@@ -15,6 +15,7 @@ use std::{
 #[cfg(debug_assertions)]
 mod smoke;
 mod tabs;
+mod windows;
 use tabs::{TabDrag, TabMotion};
 
 struct Tab {
@@ -26,6 +27,7 @@ struct Tab {
 enum Startup {
     Restore(SavedSession),
     Directory(PathBuf),
+    Default,
 }
 
 struct Tip(String);
@@ -75,6 +77,7 @@ pub struct TerminalApp {
     #[cfg(windows)]
     update_handoff: Option<crate::update::Handoff>,
     apply_update: bool,
+    last_bounds: WindowBounds,
 }
 
 impl TerminalApp {
@@ -104,10 +107,39 @@ impl TerminalApp {
                 },
             ),
             cx.observe_window_activation(window, |this, window, cx| {
+                if window.is_window_active() {
+                    windows::activated(window, cx);
+                }
                 if !window.is_window_active() {
                     this.finish_tab_drag(true, window, cx);
                 }
                 cx.notify();
+            }),
+            cx.observe_window_bounds(window, |this, window, _| {
+                this.last_bounds = window.window_bounds()
+            }),
+            cx.observe_global::<windows::SharedSettings>(|this, cx| {
+                let settings = cx.global::<windows::SharedSettings>().0.clone();
+                if this.settings != settings {
+                    this.settings = settings.clone();
+                    this.draft = settings;
+                    this.font_input = cx.new(|cx| {
+                        TextField::new(this.settings.font_family.clone(), "고정폭 글꼴", cx)
+                    });
+                    this.history_input = cx.new(|cx| {
+                        TextField::new(this.settings.scrollback.to_string(), "10000", cx)
+                    });
+                    this.profiles =
+                        platform::merge_profiles(this.detected.clone(), &this.settings.profiles);
+                    for tab in &this.tabs {
+                        if let Some(terminal) = &tab.terminal {
+                            terminal.update(cx, |terminal, cx| {
+                                terminal.apply_settings(&this.settings, cx)
+                            });
+                        }
+                    }
+                    cx.notify();
+                }
             }),
         ];
         let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
@@ -143,6 +175,7 @@ impl TerminalApp {
             #[cfg(windows)]
             update_handoff: None,
             apply_update: false,
+            last_bounds: window.window_bounds(),
         };
         if let Startup::Directory(directory) = startup {
             this.add_terminal(this.default_profile(), Some(directory), window, cx);
@@ -293,13 +326,30 @@ impl TerminalApp {
         if self.closing {
             return false;
         }
-        if self.settings.confirm_close
-            && self
-                .tabs
-                .iter()
-                .filter_map(|t| t.terminal.as_ref())
-                .any(|t| !t.read(cx).exited && t.read(cx).session.is_some())
-        {
+        let active = self
+            .tabs
+            .iter()
+            .filter_map(|t| t.terminal.as_ref())
+            .any(|t| !t.read(cx).exited && t.read(cx).session.is_some());
+        let other_active = self.apply_update
+            && cx.try_global::<windows::Windows>().is_some_and(|registry| {
+                registry
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.id != window.window_handle().window_id().as_u64())
+                    .any(|entry| {
+                        entry.root.upgrade().is_some_and(|root| {
+                            root.read(cx)
+                                .tabs
+                                .iter()
+                                .filter_map(|tab| tab.terminal.as_ref())
+                                .any(|terminal| {
+                                    !terminal.read(cx).exited && terminal.read(cx).session.is_some()
+                                })
+                        })
+                    })
+            });
+        if self.settings.confirm_close && (active || other_active) {
             self.confirm = true;
             self.menu = false;
             self.focus.focus(window, cx);
@@ -310,8 +360,7 @@ impl TerminalApp {
         false
     }
 
-    fn persist(&mut self, window: &Window, cx: &App) -> bool {
-        let bounds = window.window_bounds();
+    fn snapshot(&self, bounds: WindowBounds, cx: &App) -> SavedSession {
         let b = bounds.get_bounds();
         let tabs: Vec<_> = self
             .tabs
@@ -332,7 +381,7 @@ impl TerminalApp {
             .filter(|t| t.terminal.is_some())
             .count()
             .min(tabs.len().saturating_sub(1));
-        let saved = SavedSession {
+        SavedSession {
             tabs: if self.settings.restore_session {
                 tabs
             } else {
@@ -344,8 +393,20 @@ impl TerminalApp {
             width: b.size.width.into(),
             height: b.size.height.into(),
             maximized: matches!(bounds, WindowBounds::Maximized(_)),
+            windows: Vec::new(),
+            active_window: 0,
+        }
+    }
+
+    fn persist(&mut self, window: &Window, cx: &App) -> bool {
+        self.last_bounds = window.window_bounds();
+        let saved = self.snapshot(self.last_bounds, cx);
+        let result = if cx.try_global::<windows::Windows>().is_some() {
+            windows::save_session(saved, window.window_handle().window_id().as_u64(), cx)
+        } else {
+            saved.save(&self.dir)
         };
-        if let Err(e) = saved.save(&self.dir) {
+        if let Err(e) = result {
             eprintln!("{e:#}");
             self.status = Some(format!("{e:#}"));
             return false;
@@ -377,6 +438,15 @@ impl TerminalApp {
                 self.update_state = crate::update::State::Failed(error.to_string());
                 cx.notify();
                 return;
+            }
+            // Keep the complete snapshot while every window exits for the updater.
+            let entries = cx.global::<windows::Windows>().entries.clone();
+            cx.global_mut::<windows::Windows>().preserve_session = true;
+            let current = window.window_handle().window_id().as_u64();
+            for entry in entries.iter().filter(|entry| entry.id != current) {
+                let _ = entry
+                    .handle
+                    .update(cx, |app, window, cx| app.close_window(window, cx));
             }
         }
         let receivers: Vec<_> = self
@@ -445,6 +515,7 @@ impl TerminalApp {
         match self.draft.save(&self.dir) {
             Ok(()) => {
                 self.settings = self.draft.clone();
+                cx.set_global(windows::SharedSettings(self.settings.clone()));
                 self.config_error = false;
                 self.profiles =
                     platform::merge_profiles(self.detected.clone(), &self.settings.profiles);
@@ -462,6 +533,7 @@ impl TerminalApp {
     fn reload_settings(&mut self, cx: &mut Context<Self>) {
         match Settings::load(&self.dir) {
             Ok(settings) => {
+                cx.set_global(windows::SharedSettings(settings.clone()));
                 self.settings = settings.clone();
                 self.draft = settings;
                 self.font_input = cx
@@ -552,6 +624,11 @@ impl TerminalApp {
             );
         } else if command && m.shift {
             match k.key.as_str() {
+                "n" => {
+                    if let Err(error) = windows::open_default(cx) {
+                        self.status = Some(error.to_string());
+                    }
+                }
                 "t" => self.new_default(window, cx),
                 "w" => {
                     if let Some(tab) = self.tabs.get(self.active) {
@@ -1056,10 +1133,33 @@ impl TerminalApp {
                     })),
             );
         }
+        let behavior = div().flex().flex_col().gap_2().children(
+            config::WindowingBehavior::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(index, choice)| {
+                    button(("windowing-behavior", index), choice.label(), theme)
+                        .justify_start()
+                        .px_3()
+                        .py_2()
+                        .border_1()
+                        .border_color(if self.draft.windowing_behavior == choice {
+                            theme.accent
+                        } else {
+                            theme.border
+                        })
+                        .aria_selected(self.draft.windowing_behavior == choice)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.draft.windowing_behavior = choice;
+                            cx.notify();
+                        }))
+                }),
+        );
         let content = div().flex().flex_col().gap_5().w_full().max_w(px(820.)).mx_auto().p_8()
             .child(div().text_size(px(25.)).font_weight(FontWeight::BOLD).child("설정"))
             .child(div().text_color(theme.muted).child("설정은 저장하면 열린 터미널에도 적용됩니다."))
             .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸", profiles))
+            .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창 · 대상 창이 없으면 새 창 생성", behavior))
             .child(setting("터미널 글꼴", "설치된 고정폭 글꼴 이름 · 한글과 이모지는 대체 글꼴 사용", self.font_input.clone()))
             .child(setting("글꼴 크기", "8–48 px", div().flex().items_center().gap_3()
                 .child(icon_button("font-smaller", Icon::Minus, "글꼴 크기 줄이기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size - 1.).max(8.); cx.notify(); })))
@@ -1082,7 +1182,7 @@ impl TerminalApp {
             .child(div().h(px(1.)).bg(theme.border))
             .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("단축키"))
             .children([
-                ("새 탭 / 탭 닫기", "Ctrl+Shift+T / Ctrl+Shift+W"), ("다음 / 이전 탭", "Ctrl+Tab / Ctrl+Shift+Tab"),
+                ("새 탭 / 탭 닫기", "Ctrl+Shift+T / Ctrl+Shift+W"), ("새 창", "Ctrl+Shift+N"), ("다음 / 이전 탭", "Ctrl+Tab / Ctrl+Shift+Tab"),
                 ("복사 / 붙여넣기", "Ctrl+Shift+C / Ctrl+Shift+V"), ("찾기", "Ctrl+Shift+F"), ("프로필 메뉴 / 설정", "Ctrl+Shift+P / Ctrl+,"),
                 ("스크롤백 탐색", "Shift+PageUp / PageDown / Home / End"), ("전체 화면", "F11"),
             ].map(|(label, keys)| div().flex().justify_between().gap_4().text_size(px(13.)).child(label).child(div().text_color(theme.muted).child(keys))))
@@ -1350,7 +1450,7 @@ impl Render for TerminalApp {
             root = root.child(div().absolute().inset_0().flex().items_center().justify_center().bg(rgba(0x00000088))
                 .child(div().flex().flex_col().gap_4().w(px(420.)).p_6().rounded_lg().bg(theme.panel).border_1().border_color(theme.border).shadow_lg()
                     .child(div().text_size(px(18.)).font_weight(FontWeight::BOLD).child(if closing { "터미널 종료 중…" } else { "열린 터미널을 종료할까요?" }))
-                    .child(if closing { "셸과 터미널 연결을 정리하고 있습니다." } else { "실행 중인 명령이 함께 종료됩니다. 다음 실행 시 셸은 새로 시작됩니다." })
+                    .child(if closing { "셸과 터미널 연결을 정리하고 있습니다." } else if self.apply_update { "업데이트를 위해 모든 창의 명령을 종료합니다. 다시 시작하면 창과 탭을 복원합니다." } else { "실행 중인 명령이 함께 종료됩니다. 다음 실행 시 셸은 새로 시작됩니다." })
                     .when(!closing, |d| d.child(div().flex().justify_end().gap_2()
                         .child(button("cancel-close", "취소", theme).px_4().py_2().on_click(cx.listener(|this, _, window, cx| { this.confirm = false; this.apply_update = false; this.restore_focus(window, cx); cx.notify(); })))
                         .child(button("confirm-close", "모두 종료", theme).px_4().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, window, cx| this.close_window(window, cx))))))));
@@ -1361,7 +1461,7 @@ impl Render for TerminalApp {
 
 pub fn run(launch_options: crate::cli::Options) {
     #[cfg(debug_assertions)]
-    let smoke_mode = launch_options.smoke_mode;
+    let smoke_mode = launch_options.smoke_mode.clone();
     #[cfg(debug_assertions)]
     let dir = smoke_mode
         .as_ref()
@@ -1369,6 +1469,30 @@ pub fn run(launch_options: crate::cli::Options) {
         .unwrap_or_else(config::directory);
     #[cfg(not(debug_assertions))]
     let dir = config::directory();
+    #[cfg(windows)]
+    let host = {
+        #[cfg(debug_assertions)]
+        let enabled = smoke_mode.as_deref().is_none_or(|mode| mode == "instances");
+        #[cfg(not(debug_assertions))]
+        let enabled = true;
+        if enabled {
+            let result = crate::instance::Request::new(
+                launch_options.working_directory.clone(),
+                launch_options.new_window,
+            )
+            .and_then(|request| crate::instance::start(&dir, request));
+            match result {
+                Ok(crate::instance::Outcome::Forwarded) => return,
+                Ok(crate::instance::Outcome::Host(host)) => Some(host),
+                Err(error) => {
+                    platform::show_startup_error(&format!("{error:#}"));
+                    std::process::exit(2);
+                }
+            }
+        } else {
+            None
+        }
+    };
     let loaded = Settings::load(&dir);
     let (settings, mut error) = match loaded {
         Ok(s) => (s, None),
@@ -1408,78 +1532,76 @@ pub fn run(launch_options: crate::cli::Options) {
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
-            cx.on_window_closed(|cx, _| {
+            cx.set_global(windows::SharedSettings(settings.clone()));
+            cx.set_global(windows::Windows::new(dir, detected, saved.clone()));
+            #[cfg(windows)]
+            {
+                let requests = host.as_ref().map(|host| host.requests.clone());
+                cx.global_mut::<windows::Windows>()._host = host;
+                if let Some(requests) = requests {
+                    cx.spawn(async move |cx| {
+                        while let Ok(envelope) = requests.recv().await {
+                            let result = cx.update(|cx| windows::route(&envelope.request, cx));
+                            let _ = envelope.reply.send(result);
+                        }
+                    })
+                    .detach();
+                }
+            }
+            cx.on_window_closed(|cx, id| {
+                cx.global_mut::<windows::Windows>()
+                    .entries
+                    .retain(|entry| entry.id != id.as_u64());
                 if cx.windows().is_empty() {
                     cx.quit();
                 }
             })
             .detach();
-            let restore_size = size(
-                px(if saved.width.is_finite() && saved.width >= 560. {
-                    saved.width.min(5000.)
-                } else {
-                    1100.
-                }),
-                px(if saved.height.is_finite() && saved.height >= 320. {
-                    saved.height.min(3000.)
-                } else {
-                    720.
-                }),
-            );
-            let mut bounds = Bounds::centered(None, restore_size, cx);
-            // Retain positions only when they still intersect a connected display.
-            if let (Some(x), Some(y)) = (saved.x, saved.y)
-                && x.is_finite()
-                && y.is_finite()
+            let initial_windows = if launch_options.working_directory.is_none()
+                && settings.restore_session
+                && !saved.windows.is_empty()
             {
-                let candidate = Bounds::new(point(px(x), px(y)), restore_size);
-                if cx
-                    .displays()
-                    .iter()
-                    .any(|d| d.bounds().intersects(&candidate))
-                {
-                    bounds = candidate;
+                saved.windows.iter().take(50).cloned().collect::<Vec<_>>()
+            } else {
+                vec![saved.clone()]
+            };
+            let mut first = None;
+            let mut handles = Vec::new();
+            for geometry in initial_windows {
+                let startup = match launch_options.working_directory.clone() {
+                    Some(directory) => Startup::Directory(directory),
+                    None => Startup::Restore(geometry.clone()),
+                };
+                match windows::open(startup, geometry, error.clone(), cx) {
+                    Ok(root) => {
+                        if first.is_none() {
+                            first = Some(root);
+                        }
+                        handles.push(
+                            cx.global::<windows::Windows>()
+                                .entries
+                                .last()
+                                .unwrap()
+                                .handle,
+                        );
+                    }
+                    Err(error) => {
+                        eprintln!("창을 열지 못했습니다: {error:#}");
+                    }
                 }
             }
-            let options = WindowOptions {
-                window_bounds: Some(if saved.maximized {
-                    WindowBounds::Maximized(bounds)
-                } else {
-                    WindowBounds::Windowed(bounds)
-                }),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("edolterm".into()),
-                    appears_transparent: cfg!(windows),
-                    ..Default::default()
-                }),
-                window_min_size: Some(size(px(560.), px(320.))),
-                app_id: Some("dev.edoli.edolterm".into()),
-                ..Default::default()
-            };
-            if let Err(e) = cx.open_window(options, |window, cx| {
-                #[cfg(debug_assertions)]
-                let requested_directory = launch_options.working_directory.clone();
-                let startup = match launch_options.working_directory {
-                    Some(directory) => Startup::Directory(directory),
-                    None => Startup::Restore(saved),
-                };
-                let root = cx.new(|cx| {
-                    TerminalApp::new(dir, settings, detected, startup, error, window, cx)
-                });
-                let weak = root.downgrade();
-                window.on_window_should_close(cx, move |window, cx| {
-                    weak.update(cx, |this, cx| this.should_close(window, cx))
-                        .unwrap_or(true)
-                });
-                #[cfg(debug_assertions)]
-                if let Some(mode) = smoke_mode {
-                    smoke::start(root.clone(), mode, requested_directory, window, cx);
-                }
-                window.activate_window();
-                root
-            }) {
-                eprintln!("창을 열지 못했습니다: {e:#}");
+            if handles.is_empty() {
                 cx.quit();
+                return;
+            }
+            let active = saved.active_window.min(handles.len() - 1);
+            let _ = handles[active].update(cx, |_, window, _| window.activate_window());
+            #[cfg(debug_assertions)]
+            if let Some(mode) = smoke_mode {
+                let root = first.unwrap();
+                let _ = AnyWindowHandle::from(handles[0]).update(cx, |_, window, cx| {
+                    smoke::start(root, mode, launch_options.working_directory, window, cx);
+                });
             }
         });
 }
