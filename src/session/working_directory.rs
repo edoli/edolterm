@@ -105,6 +105,25 @@ pub(super) fn shell_args(profile: &Profile, env: &mut HashMap<String, String>) -
         env.insert("PROMPT".into(), format!("$E]9;9;$P$E\\{prompt}"));
     }
     let mut args = profile.args.clone();
+    if matches!(program.as_str(), "wsl.exe" | "wsl")
+        && let Some(directory) = env.get("EDOLTERM_RESTORE_CWD")
+    {
+        // wsl.exe accepts an absolute Windows path for --cd. Override its home
+        // directory flag before any explicit Linux command arguments.
+        let options_end = args
+            .iter()
+            .position(|arg| matches!(arg.as_str(), "--" | "--exec" | "-e"))
+            .unwrap_or(args.len());
+        if let Some(index) = args[..options_end].iter().position(|arg| arg == "--cd") {
+            if index + 1 < options_end {
+                args[index + 1] = directory.clone();
+            } else {
+                args.insert(index + 1, directory.clone());
+            }
+        } else {
+            args.splice(0..0, ["--cd".into(), directory.clone()]);
+        }
+    }
     if matches!(
         program.as_str(),
         "powershell.exe" | "powershell" | "pwsh.exe" | "pwsh"
@@ -208,6 +227,40 @@ impl<T: OnResize> OnResize for TrackedPty<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wsl_explicit_directory_overrides_home_without_changing_command_arguments() {
+        let directory = "C:\\한글 폴더\\it's & [1]";
+        let mut env = HashMap::from([("EDOLTERM_RESTORE_CWD".into(), directory.into())]);
+        let profile = Profile::new(
+            "wsl",
+            "WSL",
+            "wsl.exe",
+            &["--distribution", "Ubuntu", "--cd", "~"],
+        );
+        assert_eq!(
+            shell_args(&profile, &mut env),
+            ["--distribution", "Ubuntu", "--cd", directory]
+        );
+        assert_eq!(shell_args(&profile, &mut HashMap::new()), profile.args);
+        let profile = Profile::new(
+            "wsl",
+            "WSL",
+            "wsl.exe",
+            &["--exec", "program", "--cd", "command-option"],
+        );
+        assert_eq!(
+            shell_args(&profile, &mut env),
+            [
+                "--cd",
+                directory,
+                "--exec",
+                "program",
+                "--cd",
+                "command-option"
+            ]
+        );
+    }
 
     #[test]
     fn fragmented_osc_reports_and_uri_encoding_keep_the_last_valid_local_path() {

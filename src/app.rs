@@ -23,6 +23,11 @@ struct Tab {
     _subscription: Option<Subscription>,
 }
 
+enum Startup {
+    Restore(SavedSession),
+    Directory(PathBuf),
+}
+
 struct Tip(String);
 impl Render for Tip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -66,14 +71,18 @@ pub struct TerminalApp {
     history_input: Entity<TextField>,
     _subscriptions: Vec<Subscription>,
     settings_scroll: ScrollHandle,
+    update_state: crate::update::State,
+    #[cfg(windows)]
+    update_handoff: Option<crate::update::Handoff>,
+    apply_update: bool,
 }
 
 impl TerminalApp {
-    pub fn new(
+    fn new(
         dir: PathBuf,
         settings: Settings,
         detected: Vec<Profile>,
-        saved: SavedSession,
+        startup: Startup,
         error: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -103,7 +112,7 @@ impl TerminalApp {
         ];
         let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
         let mut this = Self {
-            dir,
+            dir: dir.clone(),
             draft: settings.clone(),
             settings,
             detected,
@@ -128,8 +137,18 @@ impl TerminalApp {
             history_input,
             _subscriptions: subscriptions,
             settings_scroll: ScrollHandle::new(),
+            update_state: crate::update::read_result(&dir)
+                .map(crate::update::State::Failed)
+                .unwrap_or_default(),
+            #[cfg(windows)]
+            update_handoff: None,
+            apply_update: false,
         };
-        if this.settings.restore_session {
+        if let Startup::Directory(directory) = startup {
+            this.add_terminal(this.default_profile(), Some(directory), window, cx);
+        } else if let Startup::Restore(saved) = startup
+            && this.settings.restore_session
+        {
             for tab in saved.tabs.into_iter().take(50) {
                 if let Some(profile) = this
                     .profiles
@@ -291,7 +310,7 @@ impl TerminalApp {
         false
     }
 
-    fn persist(&mut self, window: &Window, cx: &App) {
+    fn persist(&mut self, window: &Window, cx: &App) -> bool {
         let bounds = window.window_bounds();
         let b = bounds.get_bounds();
         let tabs: Vec<_> = self
@@ -329,7 +348,9 @@ impl TerminalApp {
         if let Err(e) = saved.save(&self.dir) {
             eprintln!("{e:#}");
             self.status = Some(format!("{e:#}"));
+            return false;
         }
+        true
     }
     fn close_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
@@ -337,7 +358,27 @@ impl TerminalApp {
         }
         self.closing = true;
         self.confirm = false;
-        self.persist(window, cx);
+        if !self.persist(window, cx) {
+            self.closing = false;
+            self.apply_update = false;
+            cx.notify();
+            return;
+        }
+        #[cfg(windows)]
+        if self.apply_update {
+            let result = self
+                .update_handoff
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("Update helper is not ready"))
+                .and_then(|handoff| handoff.commit().map_err(Into::into));
+            if let Err(error) = result {
+                self.closing = false;
+                self.apply_update = false;
+                self.update_state = crate::update::State::Failed(error.to_string());
+                cx.notify();
+                return;
+            }
+        }
         let receivers: Vec<_> = self
             .tabs
             .iter()
@@ -462,6 +503,7 @@ impl TerminalApp {
         if self.confirm {
             if k.key == "escape" {
                 self.confirm = false;
+                self.apply_update = false;
                 self.restore_focus(window, cx);
             } else if k.key == "enter" {
                 self.close_window(window, cx);
@@ -895,6 +937,106 @@ impl TerminalApp {
             .into_any_element()
     }
 
+    fn check_update(&mut self, cx: &mut Context<Self>) {
+        if self.update_state.is_busy() || self.closing {
+            return;
+        }
+        #[cfg(windows)]
+        {
+            self.update_handoff = None;
+        }
+        self.update_state = crate::update::State::Checking;
+        let task = cx
+            .background_executor()
+            .spawn(async { crate::update::check() });
+        cx.spawn(async move |this, cx| {
+            let result = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.update_state =
+                    result.unwrap_or_else(|error| crate::update::State::Failed(error.to_string()));
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    #[cfg(windows)]
+    fn download_update(&mut self, cx: &mut Context<Self>) {
+        let crate::update::State::Available(release) = self.update_state.clone() else {
+            return;
+        };
+        if self.closing {
+            return;
+        }
+        self.update_state = crate::update::State::Installing;
+        let config = self.dir.clone();
+        let task = cx.background_executor().spawn(async move {
+            let exe = std::env::current_exe()?;
+            crate::update::prepare(&release, &exe, crate::update::install_scope(&exe), &config)
+        });
+        cx.spawn(async move |this, cx| {
+            let result: anyhow::Result<crate::update::Handoff> = task.await;
+            let _ = this.update(cx, |this, cx| {
+                match result {
+                    Ok(handoff) => {
+                        this.update_handoff = Some(handoff);
+                        this.update_state = crate::update::State::Ready;
+                    }
+                    Err(error) => {
+                        this.update_state = crate::update::State::Failed(error.to_string())
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn update_view(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
+        use crate::update::State;
+        let label: String = match &self.update_state {
+            State::Unchecked => "GitHub Releases에서 새 버전을 확인합니다.".into(),
+            State::Checking => "업데이트 확인 중…".into(),
+            State::Current => "최신 버전입니다.".into(),
+            State::NoRelease => "게시된 릴리스가 없습니다.".into(),
+            State::Available(release) => format!("{} 버전 사용 가능", release.version),
+            State::Installing => "업데이트 다운로드 및 검증 중…".into(),
+            State::Ready => "준비 완료. 다시 시작하면 현재 셸이 종료됩니다.".into(),
+            State::Failed(error) => format!("업데이트 실패: {error}"),
+        };
+        let mut row = div().flex().flex_col().gap_2().child(label);
+        if !self.update_state.is_busy() {
+            row = row.child(
+                button("check-update", "업데이트 확인", theme)
+                    .px_3()
+                    .py_2()
+                    .on_click(cx.listener(|this, _, _, cx| this.check_update(cx))),
+            );
+        }
+        #[cfg(windows)]
+        if matches!(self.update_state, State::Available(_)) {
+            row = row.child(
+                button("download-update", "업데이트 다운로드", theme)
+                    .px_3()
+                    .py_2()
+                    .on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
+            );
+        } else if matches!(self.update_state, State::Ready) {
+            row = row.child(
+                button("apply-update", "다시 시작하여 업데이트", theme)
+                    .px_3()
+                    .py_2()
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.apply_update = true;
+                        this.should_close(window, cx);
+                    })),
+            );
+        }
+        row.into_any_element()
+    }
+
     fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::new(self.settings.theme == "light");
         let mut profiles = div().flex().flex_wrap().gap_2();
@@ -945,6 +1087,7 @@ impl TerminalApp {
                 ("스크롤백 탐색", "Shift+PageUp / PageDown / Home / End"), ("전체 화면", "F11"),
             ].map(|(label, keys)| div().flex().justify_between().gap_4().text_size(px(13.)).child(label).child(div().text_color(theme.muted).child(keys))))
             .child(div().flex().gap_2().pt_3().child(button("save-settings", "설정 저장", theme).px_5().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, _, cx| this.save_settings(cx)))))
+            .child(self.update_view(theme, cx))
             .child(div().text_color(theme.muted).text_size(px(12.)).child(format!("edolterm {} · GPUI + alacritty_terminal", env!("CARGO_PKG_VERSION"))));
         div()
             .id("settings-scroll")
@@ -1209,17 +1352,16 @@ impl Render for TerminalApp {
                     .child(div().text_size(px(18.)).font_weight(FontWeight::BOLD).child(if closing { "터미널 종료 중…" } else { "열린 터미널을 종료할까요?" }))
                     .child(if closing { "셸과 터미널 연결을 정리하고 있습니다." } else { "실행 중인 명령이 함께 종료됩니다. 다음 실행 시 셸은 새로 시작됩니다." })
                     .when(!closing, |d| d.child(div().flex().justify_end().gap_2()
-                        .child(button("cancel-close", "취소", theme).px_4().py_2().on_click(cx.listener(|this, _, window, cx| { this.confirm = false; this.restore_focus(window, cx); cx.notify(); })))
+                        .child(button("cancel-close", "취소", theme).px_4().py_2().on_click(cx.listener(|this, _, window, cx| { this.confirm = false; this.apply_update = false; this.restore_focus(window, cx); cx.notify(); })))
                         .child(button("confirm-close", "모두 종료", theme).px_4().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, window, cx| this.close_window(window, cx))))))));
         }
         root
     }
 }
 
-pub fn run() {
+pub fn run(launch_options: crate::cli::Options) {
     #[cfg(debug_assertions)]
-    let smoke_mode =
-        std::env::args().find_map(|arg| arg.strip_prefix("--smoke-test=").map(str::to_owned));
+    let smoke_mode = launch_options.smoke_mode;
     #[cfg(debug_assertions)]
     let dir = smoke_mode
         .as_ref()
@@ -1315,8 +1457,15 @@ pub fn run() {
                 ..Default::default()
             };
             if let Err(e) = cx.open_window(options, |window, cx| {
-                let root = cx
-                    .new(|cx| TerminalApp::new(dir, settings, detected, saved, error, window, cx));
+                #[cfg(debug_assertions)]
+                let requested_directory = launch_options.working_directory.clone();
+                let startup = match launch_options.working_directory {
+                    Some(directory) => Startup::Directory(directory),
+                    None => Startup::Restore(saved),
+                };
+                let root = cx.new(|cx| {
+                    TerminalApp::new(dir, settings, detected, startup, error, window, cx)
+                });
                 let weak = root.downgrade();
                 window.on_window_should_close(cx, move |window, cx| {
                     weak.update(cx, |this, cx| this.should_close(window, cx))
@@ -1324,7 +1473,7 @@ pub fn run() {
                 });
                 #[cfg(debug_assertions)]
                 if let Some(mode) = smoke_mode {
-                    smoke::start(root.clone(), mode, window, cx);
+                    smoke::start(root.clone(), mode, requested_directory, window, cx);
                 }
                 window.activate_window();
                 root

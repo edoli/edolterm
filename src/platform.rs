@@ -21,6 +21,24 @@ pub fn quiet_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     command
 }
 
+pub fn show_startup_error(message: &str) {
+    eprintln!("{message}");
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+        let title: Vec<u16> = "Edolterm".encode_utf16().chain(Some(0)).collect();
+        let message: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+        unsafe {
+            MessageBoxW(
+                std::ptr::null_mut(),
+                message.as_ptr(),
+                title.as_ptr(),
+                MB_OK | MB_ICONERROR,
+            );
+        }
+    }
+}
+
 pub fn find_program(name: &str) -> Option<PathBuf> {
     let path = Path::new(name);
     if path.is_absolute() {

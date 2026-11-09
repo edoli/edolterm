@@ -1375,6 +1375,7 @@ dependencies = [
  "async-channel",
  "base64",
  "embed-resource",
+ "getrandom 0.3.4",
  "gpui",
  "gpui_platform",
  "ico",

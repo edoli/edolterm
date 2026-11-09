@@ -1,0 +1,115 @@
+name: Windows x64
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      EDOLTERM_RELEASE_REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-directories: |
+            target/conpty-comparison
+            target/tools/InnoSetup
+      - name: Validate Cargo and tag versions
+        run: python scripts/release-metadata.py version
+      - name: Locate shader compiler
+        shell: pwsh
+        run: |
+          $fxc = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/fxc.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $fxc) { throw 'Windows SDK fxc.exe not found' }
+          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
+      - name: Rust tests
+        run: cargo test --locked
+      - name: Prepare Inno Setup
+        run: ./scripts/install-inno.ps1
+      - name: Build and sign packages
+        shell: pwsh
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.EDOLTERM_SIGNING_PFX_BASE64 }}
+          EDOLTERM_SIGNING_PASSWORD: ${{ secrets.EDOLTERM_SIGNING_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'edolterm-signing.pfx'
+          try {
+            $arguments = @{ Repository = $env:GITHUB_REPOSITORY; InnoCompiler = "$pwd/target/tools/InnoSetup/ISCC.exe" }
+            if ($env:SIGNING_PFX_BASE64) {
+              [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+              $arguments.SigningPfxPath = $pfx
+            } elseif ($env:GITHUB_REF_TYPE -eq 'tag') {
+              throw 'Tagged releases require the stable EDOLTERM_SIGNING_PFX_BASE64 and EDOLTERM_SIGNING_PASSWORD secrets.'
+            }
+            ./scripts/build-windows-installer.ps1 @arguments
+          } finally {
+            if (Test-Path -LiteralPath $pfx) { Remove-Item -LiteralPath $pfx }
+          }
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          if-no-files-found: error
+          path: |
+            dist/windows/edolterm-installer-exe.exe
+            dist/windows/edolterm-windows.zip
+            dist/windows/package-checksums-windows.json
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-x64
+          path: release
+      - name: Verify release files
+        run: python scripts/release-metadata.py publish release
+      - name: Determine latest release
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import json, os, subprocess
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError
+          current = tuple(map(int, os.environ['GITHUB_REF_NAME'][1:].split('.')))
+          url = "https://api.github.com/repos/" + os.environ['GITHUB_REPOSITORY'] + "/releases/latest"
+          try:
+              request = Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'User-Agent': 'Edolterm-release'})
+              with urlopen(request) as response:
+                  previous = tuple(map(int, json.load(response)['tag_name'].removeprefix('v').split('.')))
+          except HTTPError as error:
+              if error.code != 404: raise
+              previous = (0, 0, 0)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('make_latest=' + str(current >= previous).lower() + '\n')
+      - uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          make_latest: ${{ steps.latest.outputs.make_latest }}
+          fail_on_unmatched_files: true
+          files: |
+            release/edolterm-installer-exe.exe
+            release/edolterm-windows.zip

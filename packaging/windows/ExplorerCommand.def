@@ -1,0 +1,4 @@
+LIBRARY "Edolterm.ExplorerCommand.dll"
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

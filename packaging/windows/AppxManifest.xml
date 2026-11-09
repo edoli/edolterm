@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+         xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+         xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10"
+         xmlns:desktop4="http://schemas.microsoft.com/appx/manifest/desktop/windows10/4"
+         xmlns:desktop5="http://schemas.microsoft.com/appx/manifest/desktop/windows10/5"
+         xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+         IgnorableNamespaces="uap uap10 com desktop4 desktop5 rescap">
+  <Identity Name="Edoli.Edolterm.Explorer" Publisher="CN=Edolterm Development" Version="0.1.0.0" ProcessorArchitecture="x64" />
+  <Properties>
+    <DisplayName>Edolterm</DisplayName>
+    <PublisherDisplayName>Edoli</PublisherDisplayName>
+    <Logo>Assets\Logo.png</Logo>
+    <uap10:AllowExternalContent>true</uap10:AllowExternalContent>
+  </Properties>
+  <Resources><Resource Language="en-us" /><Resource Language="ko-kr" /></Resources>
+  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
+  <Applications>
+    <Application Id="Edolterm" Executable="edolterm.exe" uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="win32App">
+      <uap:VisualElements AppListEntry="none" DisplayName="Edolterm" Description="Edolterm Explorer integration" BackgroundColor="transparent"
+                          Square150x150Logo="Assets\Logo150.png" Square44x44Logo="Assets\Logo44.png" />
+      <Extensions>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer><com:SurrogateServer DisplayName="Edolterm Explorer command">
+            <com:Class Id="6C14652E-D151-48C8-A7A5-2FA4F5233897" Path="Edolterm.ExplorerCommand.dll" ThreadingModel="STA" />
+          </com:SurrogateServer></com:ComServer>
+        </com:Extension>
+        <desktop4:Extension Category="windows.fileExplorerContextMenus">
+          <desktop4:FileExplorerContextMenus>
+            <desktop5:ItemType Type="Directory"><desktop5:Verb Id="EdoltermOpenHere" Clsid="6C14652E-D151-48C8-A7A5-2FA4F5233897" /></desktop5:ItemType>
+            <desktop5:ItemType Type="Directory\Background"><desktop5:Verb Id="EdoltermOpenHereBackground" Clsid="6C14652E-D151-48C8-A7A5-2FA4F5233897" /></desktop5:ItemType>
+          </desktop4:FileExplorerContextMenus>
+        </desktop4:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+  <Capabilities><rescap:Capability Name="runFullTrust" /><rescap:Capability Name="unvirtualizedResources" /></Capabilities>
+</Package>

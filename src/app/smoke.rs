@@ -5,9 +5,17 @@ use alacritty_terminal::{
     selection::{Selection, SelectionType},
 };
 
+#[cfg(feature = "ui-tests")]
+mod file_drop;
+#[cfg(feature = "ui-tests")]
+mod scroll;
+#[cfg(feature = "ui-tests")]
+mod tabs;
+
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
-        "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm" => mode,
+        "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
+        | "scroll" | "drop" | "tabs" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -16,11 +24,31 @@ pub fn directory(mode: &str) -> PathBuf {
         .join(mode)
 }
 
-pub fn start(root: Entity<TerminalApp>, mode: String, window: &mut Window, cx: &mut App) {
+pub fn start(root: Entity<TerminalApp>, mode: String, requested_directory: Option<PathBuf>, window: &mut Window, cx: &mut App) {
     let handle = window.window_handle();
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_millis(800)).await;
         let mut failure = None;
+        if let Some(directory) = requested_directory {
+            let marker = format!("EXPLORER_START_{}", directory.display());
+            root.read_with(cx, |app, cx| {
+                if app.tabs.len() != 1 { failure = Some("Explorer launch restored unrelated tabs".into()); }
+                if let Some(terminal) = app.active_terminal()
+                    && let Some(session) = &terminal.read(cx).session
+                {
+                    session.input(b"[Console]::WriteLine(('EXPLORER_START_' + $PWD.ProviderPath))\r".to_vec());
+                }
+            });
+            let began = Instant::now();
+            let mut reached_directory = false;
+            while failure.is_none() && began.elapsed() < Duration::from_secs(10) {
+                reached_directory = root.read_with(cx, |app, cx| app.active_terminal().and_then(|terminal| terminal.read(cx).session.as_ref().map(|session| session.plain_text().contains(&marker)))).unwrap_or(false);
+                if reached_directory { break; }
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+            }
+            if !reached_directory { failure.get_or_insert_with(|| format!("Shell did not start in requested directory: {}", directory.display())); }
+            let _ = root.read_with(cx, |app, _| config::atomic_write(&app.dir.join("launch.json"), serde_json::to_string_pretty(&serde_json::json!({"passed": failure.is_none(), "directory": directory, "error": failure})).unwrap().as_bytes()));
+        }
         let result = handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
             // Exercise the actual GPUI keyboard dispatch tree after the first paint.
             let before = root.read(cx).tabs.len();
@@ -53,7 +81,10 @@ pub fn start(root: Entity<TerminalApp>, mode: String, window: &mut Window, cx: &
                         assert_eq!(t.text_for_range(0..1, &mut None, window, cx).as_deref(), Some("한"));
                         t.unmark_text(window, cx);
                         // Unicode is committed through the same input handler as the OS IME.
-                        t.replace_text_in_range(None, "Clear-Host; [Console]::WriteLine(('SMOKE_'+'한글_OK')); [Console]::WriteLine(([char]27).ToString()+'[32mANSI_OK'+([char]27).ToString()+'[0m')\r", window, cx);
+                        let cwd = directory(&mode).join("한글 작업 폴더");
+                        std::fs::create_dir_all(&cwd).unwrap();
+                        let command = format!("Set-Location -LiteralPath '{}'; Clear-Host; [Console]::WriteLine(('SMOKE_'+'한글_OK')); [Console]::WriteLine(([char]27).ToString()+'[32mANSI_OK'+([char]27).ToString()+'[0m')\r", cwd.to_string_lossy().replace('\'', "''"));
+                        t.replace_text_in_range(None, &command, window, cx);
                     });
                 });
                 Ok(())
@@ -63,11 +94,54 @@ pub fn start(root: Entity<TerminalApp>, mode: String, window: &mut Window, cx: &
         let began = Instant::now();
         let mut output_ok = false;
         while failure.is_none() && began.elapsed() < Duration::from_secs(20) {
-            output_ok = root.read_with(cx, |app, cx| app.active_terminal().and_then(|t| t.read(cx).session.as_ref().map(|s| s.plain_text().contains("SMOKE_한글_OK")))).unwrap_or(false);
+            output_ok = root.read_with(cx, |app, cx| app.active_terminal().and_then(|t| t.read(cx).session.as_ref().map(|s| s.plain_text().contains("SMOKE_한글_OK") && s.working_directory() == directory(&mode).join("한글 작업 폴더")))).unwrap_or(false);
             if output_ok { break; }
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
         if !output_ok && failure.is_none() { failure = Some("Unicode PTY output timed out".into()); }
+        #[cfg(feature = "ui-tests")]
+        if mode == "tabs" && failure.is_none() {
+            let result = handle.update(cx, |_, window, cx| tabs::run(&root, window, cx));
+            if let Err(e) = result.and_then(|r| r) { failure = Some(format!("{e:#}")); }
+        }
+        #[cfg(feature = "ui-tests")]
+        if mode == "drop" && failure.is_none() {
+            // The output marker precedes PowerShell's prompt/ReadLine setup.
+            cx.background_executor().timer(Duration::from_millis(300)).await;
+            let result = handle.update(cx, |_, window, cx| file_drop::start(&root, window, cx));
+            match result.and_then(|r| r) {
+                Err(e) => failure = Some(format!("{e:#}")),
+                Ok((path, expected)) => {
+                    cx.background_executor().timer(Duration::from_millis(250)).await;
+                    if path.exists() { failure = Some("File drop submitted the command before Enter".into()); }
+                    let result = handle.update(cx, |_, window, cx| window.dispatch_keystroke(Keystroke::parse("enter").unwrap(), cx));
+                    if let Err(e) = result { failure = Some(format!("{e:#}")); }
+                    let began = Instant::now();
+                    while failure.is_none() && began.elapsed() < Duration::from_secs(10) {
+                        if std::fs::read_to_string(&path).is_ok_and(|s| s == expected) { break; }
+                        cx.background_executor().timer(Duration::from_millis(100)).await;
+                    }
+                    if failure.is_none() && !std::fs::read_to_string(&path).is_ok_and(|s| s == expected) {
+                        let _ = root.read_with(cx, |app, cx| std::fs::write(app.dir.join("drop-terminal.txt"), app.active_terminal().unwrap().read(cx).session.as_ref().unwrap().plain_text()));
+                        failure = Some(format!("Dropped file arguments did not reach the PTY unchanged: {:?}", std::fs::read_to_string(&path)));
+                    }
+                }
+            }
+        }
+        #[cfg(feature = "ui-tests")]
+        if mode == "scroll" && failure.is_none() {
+            let result = handle.update(cx, |_, window, cx| scroll::run(&root, window, cx));
+            match result.and_then(|r| r) {
+                Err(e) => failure = Some(format!("{e:#}")),
+                Ok(expected) => {
+                    cx.background_executor().timer(Duration::from_millis(400)).await;
+                    let actual = root.read_with(cx, |app, cx| {
+                        app.active_terminal().unwrap().read(cx).session.as_ref().unwrap().terminal.lock().grid().display_offset()
+                    });
+                    if actual != expected { failure = Some(format!("Scroll continued after input stopped: {expected} -> {actual}")); }
+                }
+            }
+        }
         let result = handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
             root.update(cx, |app, cx| {
                 app.show_search(window, cx);
@@ -109,8 +183,10 @@ pub fn start(root: Entity<TerminalApp>, mode: String, window: &mut Window, cx: &
                     _ => app.hide_search(window, cx),
                 }
                 app.persist(window, cx);
+                let cwd_saved = SavedSession::load(&app.dir).is_ok_and(|saved| saved.tabs.iter().any(|tab| tab.cwd == directory(&mode).join("한글 작업 폴더")));
+                if !cwd_saved { failure.get_or_insert_with(|| "Changed working directory was not saved".into()); }
                 app.status = failure.clone().map(|e| format!("SMOKE FAILURE: {e}"));
-                let result = serde_json::json!({ "passed": failure.is_none() && output_ok && search_ok, "mode": mode, "unicode_pty": output_ok, "search": search_ok, "tabs": app.tabs.len(), "error": failure });
+                let result = serde_json::json!({ "passed": failure.is_none() && output_ok && search_ok, "mode": mode, "unicode_pty": output_ok, "cwd_saved": cwd_saved, "search": search_ok, "tabs": app.tabs.len(), "error": failure });
                 let _ = config::atomic_write(&app.dir.join("result.json"), serde_json::to_string_pretty(&result).unwrap().as_bytes());
                 cx.notify();
             });
