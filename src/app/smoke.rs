@@ -21,7 +21,7 @@ mod shortcuts;
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" => mode,
+        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -241,6 +241,18 @@ pub fn start(
                 window.draw(cx).clear(cx);
                 let metrics = terminal.update(cx, |view, cx| view.layout_probe(window, cx))?;
                 config::atomic_write(&root.read(cx).dir.join("layout.json"), serde_json::to_string_pretty(&metrics)?.as_bytes())?;
+                Ok(())
+            });
+            if let Err(e) = result.and_then(|r| r) {
+                let _ = root.read_with(cx, |app, _| config::atomic_write(&app.dir.join("result.json"), serde_json::to_string_pretty(&serde_json::json!({"passed": false, "error": format!("{e:#}")})).unwrap().as_bytes()));
+            }
+        }
+        #[cfg(feature = "ui-tests")]
+        if mode == "links" {
+            let result = handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+                let terminal = root.read(cx).active_terminal().unwrap();
+                let metrics = TerminalView::links_probe(&terminal, window, cx)?;
+                config::atomic_write(&root.read(cx).dir.join("links.json"), serde_json::to_string_pretty(&metrics)?.as_bytes())?;
                 Ok(())
             });
             if let Err(e) = result.and_then(|r| r) {

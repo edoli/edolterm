@@ -18,6 +18,7 @@ use std::{ops::Range, sync::atomic::Ordering, time::Duration};
 
 mod file_drop;
 mod layout;
+mod links;
 mod scroll;
 use scroll::ScrollLines;
 
@@ -45,6 +46,9 @@ pub struct TerminalView {
     preedit_selection: Range<usize>,
     cursor_bounds: Bounds<Pixels>,
     selecting: bool,
+    link_mouse_down: bool,
+    #[cfg(all(feature = "ui-tests", debug_assertions))]
+    link_probe: Option<links::Probe>,
     scroll_lines: ScrollLines,
     last_mouse: Option<(usize, usize)>,
     cursor_on: bool,
@@ -149,6 +153,9 @@ impl TerminalView {
             preedit_selection: 0..0,
             cursor_bounds: Bounds::default(),
             selecting: false,
+            link_mouse_down: false,
+            #[cfg(all(feature = "ui-tests", debug_assertions))]
+            link_probe: None,
             scroll_lines: ScrollLines::default(),
             last_mouse: None,
             cursor_on: true,
@@ -430,7 +437,7 @@ impl TerminalView {
             },
         )
     }
-    fn report_mouse(&self, button: u8, pos: Point<Pixels>, release: bool, mods: Modifiers) {
+    fn report_mouse(&mut self, button: u8, pos: Point<Pixels>, release: bool, mods: Modifiers) {
         if let Some(s) = &self.session {
             let mode = *s.terminal.lock().mode();
             let (col, row, _) = self.grid_position(pos);
@@ -442,6 +449,11 @@ impl TerminalView {
                 mode.contains(TermMode::SGR_MOUSE),
                 mods,
             ) {
+                #[cfg(all(feature = "ui-tests", debug_assertions))]
+                if let Some(probe) = &mut self.link_probe {
+                    probe.mouse_reports.push(bytes);
+                    return;
+                }
                 s.write(bytes);
             }
         }
@@ -449,6 +461,19 @@ impl TerminalView {
     fn mouse_down(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.focus.focus(window, cx);
         self.cursor_on = true;
+        if e.button == MouseButton::Left {
+            self.link_mouse_down = false;
+            if links::activation(e.modifiers)
+                && let Some(link) = self.link_at(e.position)
+            {
+                self.selecting = false;
+                self.link_mouse_down = true;
+                self.open_link(&link.uri, cx);
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+        }
         let Some(s) = &self.session else {
             return;
         };
@@ -493,6 +518,13 @@ impl TerminalView {
         if cx.has_active_drag() {
             return;
         }
+        if links::activation(e.modifiers) {
+            cx.notify(); // Re-evaluate Ctrl-hover at the current pointer.
+        }
+        if self.link_mouse_down && e.pressed_button == Some(MouseButton::Left) {
+            cx.stop_propagation();
+            return;
+        }
         let Some(s) = &self.session else {
             return;
         };
@@ -531,6 +563,11 @@ impl TerminalView {
         self.last_mouse = Some((col, row));
     }
     fn mouse_up(&mut self, e: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if e.button == MouseButton::Left && std::mem::take(&mut self.link_mouse_down) {
+            self.selecting = false;
+            cx.stop_propagation();
+            return;
+        }
         if cx.has_active_drag() {
             self.selecting = false;
             return;
@@ -552,6 +589,14 @@ impl TerminalView {
             );
         }
         self.selecting = false;
+    }
+    fn open_link(&mut self, uri: &str, cx: &mut Context<Self>) {
+        #[cfg(all(feature = "ui-tests", debug_assertions))]
+        if let Some(probe) = &mut self.link_probe {
+            probe.opened.push(uri.to_owned());
+            return;
+        }
+        cx.open_url(uri);
     }
     fn scroll(&mut self, e: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         let Some(s) = &self.session else {
@@ -666,6 +711,9 @@ impl TerminalView {
             )
         };
         let origin = bounds.origin + point(px(8.), px(self.grid_top));
+        let hovered_link = links::activation(window.modifiers())
+            .then(|| self.link_at(window.mouse_position()))
+            .flatten();
         let focused = self.focus.is_focused(window) && window.is_window_active();
         let mut spans: Vec<TextSpan> = Vec::with_capacity(rows);
         for (p, cell) in cells {
@@ -752,14 +800,15 @@ impl TerminalView {
                 font,
                 color: fg,
                 background_color: None,
-                underline: cell
-                    .flags
-                    .intersects(Flags::ALL_UNDERLINES)
-                    .then_some(UnderlineStyle {
-                        color: Some(fg),
-                        thickness: px(1.),
-                        wavy: cell.flags.contains(Flags::UNDERCURL),
-                    }),
+                underline: (cell.flags.intersects(Flags::ALL_UNDERLINES)
+                    || hovered_link
+                        .as_ref()
+                        .is_some_and(|link| link.cells.contains(&p)))
+                .then_some(UnderlineStyle {
+                    color: Some(fg),
+                    thickness: px(1.),
+                    wavy: cell.flags.contains(Flags::UNDERCURL),
+                }),
                 strikethrough: cell.flags.contains(Flags::STRIKEOUT).then_some(
                     StrikethroughStyle {
                         color: Some(fg),
@@ -955,20 +1004,25 @@ impl EntityInputHandler for TerminalView {
 }
 
 impl Render for TerminalView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let a = cx.entity();
         let b = a.clone();
         let error = self.error.clone();
+        let over_link = links::activation(window.modifiers())
+            && self.link_at(window.mouse_position()).is_some();
         div()
             .id("terminal")
             .relative()
             .size_full()
             .track_focus(&self.focus)
             .cursor_text()
+            .when(over_link, |view| view.cursor_pointer())
+            .on_hover(cx.listener(|_, _, _, cx| cx.notify()))
             .overflow_hidden()
             .bg(Theme::new(self.settings.theme == "light").terminal_bg())
             .on_key_down(cx.listener(Self::key))
             .on_key_up(cx.listener(Self::key_up))
+            .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))
             .on_drag_move(cx.listener(Self::file_drag_move))
             .on_drop(cx.listener(Self::drop_files))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
