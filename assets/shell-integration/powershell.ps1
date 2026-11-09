@@ -1,4 +1,8 @@
 # Installed in this process only, after PowerShell loads the user's profiles.
+# ConPTY transports UTF-8 regardless of the machine's legacy console code page.
+$global:OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+[Console]::InputEncoding = $global:OutputEncoding
+[Console]::OutputEncoding = $global:OutputEncoding
 if ($env:EDOLTERM_RESTORE_CWD) {
     Set-Location -LiteralPath $env:EDOLTERM_RESTORE_CWD -ErrorAction SilentlyContinue
     Remove-Item Env:EDOLTERM_RESTORE_CWD

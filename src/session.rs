@@ -282,6 +282,9 @@ mod tests {
         for profile in &profiles {
             let dir = root.join(format!("{} 한글 '프로젝트; 경로", profile.id));
             std::fs::create_dir_all(&dir).unwrap();
+            // Windows can expose TEMP through an 8.3 alias while the shell
+            // reports its long path. Compare resolved filesystem paths.
+            let expected_directory = dir.canonicalize().unwrap();
             let (session, events) =
                 Session::start(profile.clone(), None, &Settings::default(), 0).unwrap();
             let command = if profile.id == "cmd" {
@@ -293,7 +296,12 @@ mod tests {
                 )
             };
             session.input(command.into_bytes());
-            pump_until(&session, &events, || session.working_directory() == dir);
+            pump_until(&session, &events, || {
+                session
+                    .working_directory()
+                    .canonicalize()
+                    .is_ok_and(|actual| actual == expected_directory)
+            });
             saved.tabs.push(SavedTab {
                 profile_id: profile.id.clone(),
                 cwd: session.working_directory(),
@@ -491,6 +499,49 @@ mod tests {
         }
         drop(term);
         session.shutdown();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn powershell_uses_utf8_after_legacy_console_encoding() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let mut programs = vec![PathBuf::from("powershell.exe")];
+        if let Some(pwsh) = crate::platform::find_program("pwsh") {
+            programs.push(pwsh);
+        }
+        for program in programs {
+            let script = format!(
+                "[Console]::InputEncoding = [Text.Encoding]::GetEncoding(437)\n\
+                 [Console]::OutputEncoding = [Text.Encoding]::GetEncoding(437)\n\
+                 $global:OutputEncoding = [Text.Encoding]::ASCII\n{}",
+                include_str!("../assets/shell-integration/powershell.ps1")
+            );
+            let encoded = STANDARD.encode(
+                script
+                    .encode_utf16()
+                    .flat_map(u16::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            );
+            let profile = Profile::new(
+                "utf8",
+                "UTF-8",
+                program.to_string_lossy(),
+                &[
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NoExit",
+                    "-EncodedCommand",
+                    &encoded,
+                ],
+            );
+            let (session, events) = Session::start(profile, None, &Settings::default(), 0).unwrap();
+            session.input(b"[Console]::WriteLine(('UTF8_' + [char]0xD55C + [char]0xAE00 + '_OK')); [Console]::WriteLine(('ENCODINGS_' + [Console]::InputEncoding.CodePage + ',' + [Console]::OutputEncoding.CodePage + ',' + $OutputEncoding.CodePage))\r".to_vec());
+            pump_until(&session, &events, || {
+                let output = session.plain_text();
+                output.contains("UTF8_한글_OK") && output.contains("ENCODINGS_65001,65001,65001")
+            });
+            stop_and_wait(&session);
+        }
     }
 
     #[test]
