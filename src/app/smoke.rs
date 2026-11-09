@@ -21,7 +21,7 @@ mod shortcuts;
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" => mode,
+        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -232,6 +232,21 @@ pub fn start(
             Ok(())
         });
         if let Err(e) = result.and_then(|r| r) { eprintln!("SMOKE FAILURE: {e:#}"); }
+        #[cfg(feature = "ui-tests")]
+        if mode == "layout" {
+            let result = handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+                let terminal = root.read(cx).active_terminal().unwrap();
+                terminal.update(cx, |view, cx| { view.settings.font_size = 15.; cx.notify(); });
+                window.refresh();
+                window.draw(cx).clear(cx);
+                let metrics = terminal.update(cx, |view, cx| view.layout_probe(window, cx))?;
+                config::atomic_write(&root.read(cx).dir.join("layout.json"), serde_json::to_string_pretty(&metrics)?.as_bytes())?;
+                Ok(())
+            });
+            if let Err(e) = result.and_then(|r| r) {
+                let _ = root.read_with(cx, |app, _| config::atomic_write(&app.dir.join("result.json"), serde_json::to_string_pretty(&serde_json::json!({"passed": false, "error": format!("{e:#}")})).unwrap().as_bytes()));
+            }
+        }
         #[cfg(feature = "ui-tests")]
         {
             cx.background_executor().timer(Duration::from_millis(300)).await;

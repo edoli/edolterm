@@ -17,6 +17,7 @@ use gpui::{prelude::*, *};
 use std::{ops::Range, sync::atomic::Ordering, time::Duration};
 
 mod file_drop;
+mod layout;
 mod scroll;
 use scroll::ScrollLines;
 
@@ -39,6 +40,7 @@ pub struct TerminalView {
     bounds: Bounds<Pixels>,
     cell_width: f32,
     cell_height: f32,
+    grid_top: f32,
     preedit: String,
     preedit_selection: Range<usize>,
     cursor_bounds: Bounds<Pixels>,
@@ -142,6 +144,7 @@ impl TerminalView {
             bounds: Bounds::default(),
             cell_width: 9.,
             cell_height: 21.,
+            grid_top: 6.,
             preedit: String::new(),
             preedit_selection: 0..0,
             cursor_bounds: Bounds::default(),
@@ -416,7 +419,7 @@ impl TerminalView {
     fn grid_position(&self, p: Point<Pixels>) -> (usize, usize, Side) {
         let max = self.session.as_ref().map(|s| s.size).unwrap_or_default();
         let x = (f32::from(p.x - self.bounds.left()) - 8.).max(0.) / self.cell_width;
-        let y = (f32::from(p.y - self.bounds.top()) - 6.).max(0.) / self.cell_height;
+        let y = (f32::from(p.y - self.bounds.top()) - self.grid_top).max(0.) / self.cell_height;
         (
             (x as usize).min(max.cols - 1),
             (y as usize).min(max.rows - 1),
@@ -612,24 +615,27 @@ impl TerminalView {
             underline: None,
             strikethrough: None,
         };
-        let width = window
+        let measurement = window
             .text_system()
-            .shape_line("M".into(), size, &[run], None)
-            .width;
-        self.cell_width = f32::from(width).max(1.);
-        self.cell_height = (self.settings.font_size * 1.45).ceil();
+            .shape_line("M".into(), size, &[run], None);
+        self.cell_width = f32::from(measurement.width).max(1.);
+        let vertical = layout::ViewportRows::fit(
+            f32::from(bounds.size.height),
+            f32::from(measurement.ascent + measurement.descent),
+            window.scale_factor(),
+        );
+        self.cell_height = vertical.height;
+        self.grid_top = vertical.top;
         let cols = ((f32::from(bounds.size.width) - 24.) / self.cell_width)
             .floor()
             .clamp(2., 4096.) as usize;
-        let rows = ((f32::from(bounds.size.height) - 12.) / self.cell_height)
-            .floor()
-            .clamp(1., 4096.) as usize;
+        let rows = vertical.count;
         if let Some(s) = &mut self.session {
             s.resize(GridSize {
                 cols,
                 rows,
                 cell_width: self.cell_width.ceil() as u16,
-                cell_height: self.cell_height as u16,
+                cell_height: self.cell_height.ceil() as u16,
             });
         }
         let mut frame = Frame {
@@ -659,7 +665,7 @@ impl TerminalView {
                 term.history_size(),
             )
         };
-        let origin = bounds.origin + point(px(8.), px(6.));
+        let origin = bounds.origin + point(px(8.), px(self.grid_top));
         let focused = self.focus.is_focused(window) && window.is_window_active();
         let mut spans: Vec<TextSpan> = Vec::with_capacity(rows);
         for (p, cell) in cells {
