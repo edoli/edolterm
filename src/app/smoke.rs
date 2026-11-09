@@ -122,6 +122,12 @@ pub fn start(
             if let Err(e) = result.and_then(|r| r) { failure = Some(format!("{e:#}")); }
         }
         #[cfg(all(feature = "ui-tests", windows))]
+        if mode == "shortcuts" && failure.is_none()
+            && let Err(e) = shortcuts::duplicate_tab(&root, handle, cx).await
+        {
+            failure = Some(format!("{e:#}"));
+        }
+        #[cfg(all(feature = "ui-tests", windows))]
         if mode == "keys" && failure.is_none()
             && let Err(e) = keys::run(&root, handle, cx).await
         {

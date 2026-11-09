@@ -31,6 +31,18 @@ impl TerminalApp {
     ) -> bool {
         match action {
             Action::NewTab => self.new_default(window, cx),
+            Action::DuplicateTab => {
+                let Some(terminal) = self.active_terminal() else {
+                    return false;
+                };
+                let view = terminal.read(cx);
+                let Some(session) = &view.session else {
+                    return false;
+                };
+                let profile = view.profile.clone();
+                let cwd = session.working_directory();
+                self.add_terminal(profile, Some(cwd), window, cx);
+            }
             Action::NewWindow => {
                 if let Err(error) = windows::open_default(cx) {
                     self.status = Some(error.to_string());
@@ -111,6 +123,7 @@ impl TerminalApp {
                             }
                         }
                         Action::Paste => view.paste(cx),
+                        Action::SelectAll => view.select_all(cx),
                         Action::ScrollUp
                         | Action::ScrollDown
                         | Action::PageUp
@@ -289,6 +302,16 @@ impl TerminalApp {
 
     fn shortcuts_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::new(self.settings.theme == "light");
+        let remove_color = rgb(if self.settings.theme == "light" {
+            0xb65050
+        } else {
+            0xd49a9a
+        });
+        let remove_hover_color = rgb(if self.settings.theme == "light" {
+            0xa83d3d
+        } else {
+            0xffb4ab
+        });
         let mut rows = div().flex().flex_col().gap_1();
         let mut group = "";
         for (row, definition) in DEFINITIONS.iter().enumerate() {
@@ -320,7 +343,10 @@ impl TerminalApp {
                     div()
                         .flex()
                         .items_center()
-                        .rounded_sm()
+                        .h(px(30.))
+                        .bg(theme.panel)
+                        .rounded_md()
+                        .overflow_hidden()
                         .border_1()
                         .border_color(if recording {
                             theme.accent
@@ -337,24 +363,35 @@ impl TerminalApp {
                                 },
                                 theme,
                             )
-                            .px_2()
-                            .py_1()
+                            .px_3()
+                            .h_full()
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
                                     this.start_shortcut_capture(id, Some(index), window, cx)
                                 },
                             )),
                         )
+                        .child(div().w(px(1.)).h(px(12.)).bg(theme.border))
                         .child(
-                            icon_button(
-                                ("shortcut-remove", row * 100 + index),
-                                Icon::Close,
-                                "단축키 삭제",
-                                theme,
-                            )
-                            .size(px(24.))
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
+                            div()
+                                .id(("shortcut-remove", row * 100 + index))
+                                .role(Role::Button)
+                                .aria_label("단축키 삭제")
+                                .tooltip(tip("단축키 삭제".into()))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .w(px(28.))
+                                .h_full()
+                                .flex_shrink_0()
+                                .cursor_pointer()
+                                .bg(rgba(0xe5737310))
+                                .text_color(remove_color)
+                                .hover(move |s| {
+                                    s.bg(rgba(0xe573732b)).text_color(remove_hover_color)
+                                })
+                                .child(icon(Icon::Trash, 14.))
+                                .on_click(cx.listener(move |this, _, _, cx| {
                                     let definition =
                                         DEFINITIONS.iter().find(|d| d.id == id).unwrap();
                                     let mut keys =
@@ -362,8 +399,7 @@ impl TerminalApp {
                                     keys.remove(index);
                                     this.shortcut_capture = None;
                                     this.set_shortcut_keys(id, Some(keys), cx);
-                                },
-                            )),
+                                })),
                         ),
                 );
             }
@@ -378,7 +414,9 @@ impl TerminalApp {
                     theme,
                 )
                 .px_2()
-                .py_1()
+                .h(px(30.))
+                .bg(theme.bg)
+                .text_color(theme.muted)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.start_shortcut_capture(id, None, window, cx)
                 })),

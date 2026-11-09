@@ -8,6 +8,7 @@ pub type Overrides = BTreeMap<String, Vec<String>>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
     NewTab,
+    DuplicateTab,
     NewWindow,
     CloseTab,
     CloseWindow,
@@ -22,6 +23,7 @@ pub enum Action {
     Find,
     Copy,
     Paste,
+    SelectAll,
     ScrollUp,
     ScrollDown,
     PageUp,
@@ -52,6 +54,13 @@ macro_rules! binding {
 // GPUI spelling uses '-' separators and pageup/pagedown instead of pgup/pgdn.
 pub const DEFINITIONS: &[Definition] = &[
     binding!("newTab", "새 탭", "탭과 창", Action::NewTab, "ctrl-shift-t"),
+    binding!(
+        "duplicateTab",
+        "탭 복제",
+        "탭과 창",
+        Action::DuplicateTab,
+        "ctrl-shift-d"
+    ),
     binding!(
         "newWindow",
         "새 창",
@@ -243,6 +252,13 @@ pub const DEFINITIONS: &[Definition] = &[
         "ctrl-shift-c",
         "ctrl-insert",
         "enter"
+    ),
+    binding!(
+        "selectAll",
+        "전체 선택",
+        "클립보드",
+        Action::SelectAll,
+        "ctrl-shift-a"
     ),
     binding!(
         "paste",
@@ -487,6 +503,9 @@ mod tests {
     fn windows_defaults_and_context_sensitive_enter() {
         let bindings = Bindings::new(&Overrides::new()).unwrap();
         for (key, expected) in [
+            ("ctrl-shift-d", Some(Action::DuplicateTab)),
+            ("ctrl-shift-a", Some(Action::SelectAll)),
+            ("ctrl-shift-k", None),
             ("ctrl-shift-space", Some(Action::ProfileMenu)),
             ("ctrl-shift-p", None),
             ("ctrl-alt-9", Some(Action::LastTab)),

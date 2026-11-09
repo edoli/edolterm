@@ -248,6 +248,30 @@ impl TerminalView {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
     }
+
+    pub fn select_all(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let mut term = session.terminal.lock();
+        let start = TermPoint::new(term.topmost_line(), Column(0));
+        let mut end = start;
+        // Include scrollback, but exclude unused rows after the last text cell.
+        'rows: for row in (term.topmost_line().0..term.screen_lines() as i32).rev() {
+            for col in (0..term.columns()).rev() {
+                let point = TermPoint::new(Line(row), Column(col));
+                let cell = &term.grid()[point];
+                if cell.c != ' ' || cell.zerowidth().is_some_and(|chars| !chars.is_empty()) {
+                    end = point;
+                    break 'rows;
+                }
+            }
+        }
+        let mut selection = Selection::new(SelectionType::Simple, start, Side::Left);
+        selection.update(end, Side::Right);
+        term.selection = Some(selection);
+        cx.notify();
+    }
     pub fn paste(&mut self, cx: &mut Context<Self>) {
         if let Some(s) = &self.session
             && !self.exited

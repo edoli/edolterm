@@ -73,6 +73,65 @@ fn exercise(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Re
         term.selection = Some(selection);
         cx.notify();
     });
+    let unicode = format!("SELECT_{}", "한글🙂 abcdef ".repeat(20));
+    terminal.update(cx, |view, _| {
+        let mut term = view.session.as_ref().unwrap().terminal.lock();
+        let mut parser: Processor = Processor::new();
+        parser.advance(&mut *term, format!("\r\n{unicode}").as_bytes());
+    });
+    press("ctrl-shift-a", window, cx)?;
+    let selected = terminal
+        .read(cx)
+        .session
+        .as_ref()
+        .unwrap()
+        .terminal
+        .lock()
+        .selection_to_string()
+        .unwrap_or_default();
+    ensure!(
+        selected.contains("SMOKE_한글_OK")
+            && selected.contains("SCROLL_000")
+            && selected.contains("SCROLL_099"),
+        "select all omitted scrollback"
+    );
+    ensure!(
+        selected.ends_with(unicode.trim_end()),
+        "select all damaged wrapped Unicode or included unused rows: {selected:?}"
+    );
+    terminal.update(cx, |view, _| {
+        let mut parser: Processor = Processor::new();
+        parser.advance(
+            &mut *view.session.as_ref().unwrap().terminal.lock(),
+            b"\x1b[?1049hALT_ONLY",
+        );
+    });
+    press("ctrl-shift-a", window, cx)?;
+    let selected = terminal
+        .read(cx)
+        .session
+        .as_ref()
+        .unwrap()
+        .terminal
+        .lock()
+        .selection_to_string()
+        .unwrap_or_default();
+    ensure!(
+        selected.contains("ALT_ONLY") && !selected.contains("SCROLL_000"),
+        "alternate screen selection included the main buffer"
+    );
+    terminal.update(cx, |view, _| {
+        let mut parser: Processor = Processor::new();
+        let mut term = view.session.as_ref().unwrap().terminal.lock();
+        parser.advance(&mut *term, b"\x1b[?1049l");
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+        );
+        selection.update(Point::new(Line(0), Column(5)), Side::Right);
+        term.selection = Some(selection);
+    });
     press("enter", window, cx)?;
     ensure!(
         terminal
@@ -200,6 +259,82 @@ fn exercise(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Re
         );
         app.activate(initial, window, cx);
         Ok(())
+    })?;
+    Ok(())
+}
+
+#[cfg(windows)]
+pub(super) async fn duplicate_tab(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let (original, original_id, profile, cwd) = root.read_with(cx, |app, cx| {
+        let view = app.active_terminal().unwrap();
+        let terminal = view.read(cx);
+        (
+            view.clone(),
+            app.tabs[app.active].id,
+            terminal.profile.clone(),
+            terminal.session.as_ref().unwrap().working_directory(),
+        )
+    });
+    let duplicate = handle.update(cx, |_, window, cx| -> Result<_> {
+        let count = root.read(cx).tabs.len();
+        press("ctrl-shift-d", window, cx)?;
+        ensure!(
+            root.read(cx).tabs.len() == count + 1,
+            "duplicate did not open a tab"
+        );
+        let duplicate = root.read(cx).active_terminal().unwrap();
+        ensure!(
+            duplicate != original,
+            "duplicate reused the original terminal"
+        );
+        ensure!(
+            duplicate.read(cx).profile == profile,
+            "duplicate changed profile"
+        );
+        ensure!(
+            duplicate
+                .read(cx)
+                .session
+                .as_ref()
+                .unwrap()
+                .working_directory()
+                == cwd,
+            "duplicate changed directory"
+        );
+        duplicate
+            .read(cx)
+            .session
+            .as_ref()
+            .unwrap()
+            .input(b"[Console]::WriteLine(('DUP_CWD_' + $PWD.ProviderPath))\r".to_vec());
+        Ok(duplicate)
+    })??;
+    let expected = format!("DUP_CWD_{}", cwd.display());
+    let started = Instant::now();
+    loop {
+        let text = duplicate.read_with(cx, |view, _| view.session.as_ref().unwrap().plain_text());
+        if text.contains(&expected) {
+            break;
+        }
+        ensure!(
+            started.elapsed() < Duration::from_secs(12),
+            "duplicate shell did not start in the source directory: {text}"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(25))
+            .await;
+    }
+    handle.update(cx, |_, window, cx| {
+        root.update(cx, |app, cx| {
+            let id = app.tabs[app.active].id;
+            app.close_tab(id, window, cx);
+            let index = app.tabs.iter().position(|t| t.id == original_id).unwrap();
+            app.activate(index, window, cx);
+        });
     })?;
     Ok(())
 }

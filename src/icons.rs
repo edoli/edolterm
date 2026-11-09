@@ -23,7 +23,7 @@ macro_rules! icons {
 }
 
 icons! {
-    Close => "close", Plus => "plus", Minus => "minus", ChevronDown => "chevron-down",
+    Close => "close", Trash => "trash", Plus => "plus", Minus => "minus", ChevronDown => "chevron-down",
     Terminal => "terminal", Settings => "settings",
     ArrowUp => "arrow-up", ArrowDown => "arrow-down", Square => "square", CheckSquare => "check-square",
 }
