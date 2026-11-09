@@ -202,7 +202,16 @@ pub fn start(
                         for id in close { app.close_tab(id, window, cx); }
                     }
                     "menu" => { app.hide_search(window, cx); app.menu = true; app.focus.focus(window, cx); }
-                    "settings" => { app.hide_search(window, cx); app.settings_tab(window, cx); }
+                    "settings" => {
+                        app.hide_search(window, cx);
+                        app.settings_tab(window, cx);
+                        app.draft.theme = "system".into();
+                        app.save_settings(cx);
+                        assert_eq!(Settings::load(&app.dir).unwrap().theme, "system");
+                        app.reload_settings(cx);
+                        assert_eq!(app.settings.theme, "system");
+                        assert_eq!(app.draft.theme, "system");
+                    }
                     "overflow" => {
                         app.hide_search(window, cx);
                         // Failed profiles avoid spawning 12 real shells just for tab layout QA.

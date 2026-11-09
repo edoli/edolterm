@@ -36,7 +36,7 @@ impl Default for Settings {
             .into(),
             font_size: 15.,
             scrollback: 10_000,
-            theme: "dark".into(),
+            theme: "system".into(),
             confirm_close: true,
             restore_session: true,
             allow_osc52: false,
@@ -108,8 +108,8 @@ impl Settings {
         if self.scrollback > 1_000_000 {
             bail!("스크롤백은 최대 1,000,000줄입니다.");
         }
-        if !matches!(self.theme.as_str(), "dark" | "light") {
-            bail!("theme은 dark 또는 light여야 합니다.");
+        if !matches!(self.theme.as_str(), "dark" | "light" | "system") {
+            bail!("theme은 dark, light 또는 system이어야 합니다.");
         }
         let mut ids = std::collections::HashSet::new();
         for p in &self.profiles {
@@ -270,6 +270,23 @@ mod tests {
     }
     #[test]
     fn settings_round_trip_and_validation() {
+        for theme in ["dark", "light", "system"] {
+            let settings = Settings {
+                theme: theme.into(),
+                ..Settings::default()
+            };
+            settings.validate().unwrap();
+            let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(settings, parsed);
+        }
+        assert!(
+            Settings {
+                theme: "unknown".into(),
+                ..Settings::default()
+            }
+            .validate()
+            .is_err()
+        );
         let mut settings = Settings::default();
         let mut profile = Profile::new(
             "custom",

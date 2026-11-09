@@ -240,7 +240,7 @@ impl TerminalApp {
         floating: bool,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let id = tab.id;
         let active = index == self.active;
         let (title, name, bell) = if let Some(terminal) = &tab.terminal {

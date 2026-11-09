@@ -2,7 +2,7 @@ use alacritty_terminal::{
     term::color::Colors,
     vte::ansi::{Color, Rgb},
 };
-use gpui::{Hsla, rgb};
+use gpui::{App, Hsla, WindowAppearance, rgb};
 
 // Windows Terminal's Campbell scheme, in ANSI order (not Windows console order).
 const CAMPBELL: [usize; 16] = [
@@ -22,6 +22,21 @@ pub struct Theme {
     pub accent: Hsla,
 }
 impl Theme {
+    pub fn is_light(setting: &str, cx: &App) -> bool {
+        match setting {
+            "system" => matches!(
+                cx.window_appearance(),
+                WindowAppearance::Light | WindowAppearance::VibrantLight
+            ),
+            "light" => true,
+            _ => false,
+        }
+    }
+
+    pub fn from_setting(setting: &str, cx: &App) -> Self {
+        Self::new(Self::is_light(setting, cx))
+    }
+
     pub fn new(light: bool) -> Self {
         if light {
             Self {

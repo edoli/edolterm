@@ -133,6 +133,11 @@ impl TerminalView {
                 cx.notify();
             }),
             cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+            cx.observe_window_appearance(window, |this, _, cx| {
+                if this.settings.theme == "system" {
+                    cx.notify();
+                }
+            }),
         ];
         Self {
             title: profile.name.clone(),
@@ -167,7 +172,7 @@ impl TerminalView {
     }
 
     fn event(&mut self, event: Event, cx: &mut Context<Self>) {
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         match event {
             Event::Wakeup => {
                 if let Some(s) = &self.session {
@@ -639,7 +644,7 @@ impl TerminalView {
     ) -> Frame {
         self.bounds = bounds;
         let old_cursor_bounds = self.cursor_bounds;
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let mut font = font(self.settings.font_family.clone());
         font.features = FontFeatures::disable_ligatures();
         font.fallbacks = Some(FontFallbacks::from_fonts(if cfg!(windows) {
@@ -1019,7 +1024,7 @@ impl Render for TerminalView {
             .when(over_link, |view| view.cursor_pointer())
             .on_hover(cx.listener(|_, _, _, cx| cx.notify()))
             .overflow_hidden()
-            .bg(Theme::new(self.settings.theme == "light").terminal_bg())
+            .bg(Theme::from_setting(&self.settings.theme, cx).terminal_bg())
             .on_key_down(cx.listener(Self::key))
             .on_key_up(cx.listener(Self::key_up))
             .on_modifiers_changed(cx.listener(|_, _, _, cx| cx.notify()))

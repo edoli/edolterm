@@ -125,6 +125,11 @@ impl TerminalApp {
             cx.observe_window_bounds(window, |this, window, _| {
                 this.last_bounds = window.window_bounds()
             }),
+            cx.observe_window_appearance(window, |this, _, cx| {
+                if this.settings.theme == "system" {
+                    cx.notify();
+                }
+            }),
             cx.observe_global::<windows::SharedSettings>(|this, cx| {
                 let settings = cx.global::<windows::SharedSettings>().0.clone();
                 if this.settings != settings {
@@ -694,7 +699,7 @@ impl TerminalApp {
 
     fn tabs_view(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.animate_tabs(window, cx);
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let controls = cfg!(windows) && !window.is_fullscreen();
         let left = if cfg!(target_os = "macos") { 78. } else { 0. };
         let (viewport, tab_width, tabs_extent) = self.tab_dimensions(window);
@@ -917,7 +922,7 @@ impl TerminalApp {
     }
 
     fn profile_menu(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let (_, _, tabs_extent) = self.tab_dimensions(window);
         let inset = if cfg!(target_os = "macos") { 78. } else { 0. };
         let menu_left = (inset + tabs_extent + 40.)
@@ -1131,7 +1136,7 @@ impl TerminalApp {
     }
 
     fn general_settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let mut profiles = div().flex().flex_wrap().gap_2();
         for (index, p) in self.profiles.iter().enumerate() {
             let id = p.id.clone();
@@ -1171,6 +1176,23 @@ impl TerminalApp {
                         }))
                 }),
         );
+        let themes = div().flex().gap_2().children(
+            [("dark", "다크"), ("light", "라이트"), ("system", "시스템")]
+                .into_iter()
+                .enumerate()
+                .map(|(index, (value, label))| {
+                    button(("theme", index), label, theme)
+                        .px_4()
+                        .py_2()
+                        .border_1()
+                        .border_color(if self.draft.theme == value { theme.accent } else { theme.border })
+                        .aria_selected(self.draft.theme == value)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.draft.theme = value.into();
+                            cx.notify();
+                        }))
+                }),
+        );
         let content = div().flex().flex_col().gap_5().w_full().max_w(px(820.)).mx_auto().p_8()
             .child(self.update_view(theme, cx))
             .child(div().text_size(px(25.)).font_weight(FontWeight::BOLD).child("설정"))
@@ -1183,7 +1205,7 @@ impl TerminalApp {
                 .child(format!("{} px", self.draft.font_size))
                 .child(icon_button("font-larger", Icon::Plus, "글꼴 크기 늘리기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size + 1.).min(48.); cx.notify(); })))))
             .child(setting("스크롤백", "탭당 보관할 줄 수 · 최대 1,000,000줄", self.history_input.clone()))
-            .child(setting("테마", "터미널과 앱에 함께 적용", button("theme", if self.draft.theme == "light" { "라이트" } else { "다크" }, theme).px_4().py_2().on_click(cx.listener(|this, _, _, cx| { this.draft.theme = if this.draft.theme == "light" { "dark" } else { "light" }.into(); cx.notify(); }))))
+            .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", themes))
             .child(toggle("confirm-close", "창을 닫을 때 열린 세션 확인", self.draft.confirm_close, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.confirm_close = !this.draft.confirm_close; cx.notify(); })))
             .child(toggle("restore-session", "다음 실행 시 탭과 시작 폴더 복원", self.draft.restore_session, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.restore_session = !this.draft.restore_session; cx.notify(); })))
             .child(div().text_size(px(12.)).text_color(theme.muted).child("복원할 때 셸은 새로 실행됩니다. 실행 중인 명령과 출력은 복원되지 않습니다."))
@@ -1372,7 +1394,7 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
 
 impl Render for TerminalApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let content = if let Some(t) = self.active_terminal() {
             div().flex_1().min_h_0().child(t).into_any_element()
         } else {

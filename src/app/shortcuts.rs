@@ -243,7 +243,7 @@ impl TerminalApp {
     }
 
     pub(super) fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::new(self.settings.theme == "light");
+        let theme = Theme::from_setting(&self.settings.theme, cx);
         let nav = div()
             .w(px(168.))
             .h_full()
@@ -301,13 +301,14 @@ impl TerminalApp {
     }
 
     fn shortcuts_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::new(self.settings.theme == "light");
-        let remove_color = rgb(if self.settings.theme == "light" {
+        let theme = Theme::from_setting(&self.settings.theme, cx);
+        let light = Theme::is_light(&self.settings.theme, cx);
+        let remove_color = rgb(if light {
             0xb65050
         } else {
             0xd49a9a
         });
-        let remove_hover_color = rgb(if self.settings.theme == "light" {
+        let remove_hover_color = rgb(if light {
             0xa83d3d
         } else {
             0xffb4ab
