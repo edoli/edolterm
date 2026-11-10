@@ -290,11 +290,11 @@ impl TerminalApp {
                 div().flex().justify_end().child(toggle("restore-session", "세션 복원", self.draft.restore_session, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.restore_session = !this.draft.restore_session; cx.notify(); })))))
             .child(div().mt_5().mb_2().text_size(px(16.)).font_weight(FontWeight::BOLD).child("사용자 지정 프로필"))
             .child(setting("프로필 편집", "설정 파일의 [[profiles]]에서 실행 파일, 인자, 시작 폴더, 환경변수를 추가할 수 있습니다.", theme,
-                button("edit-config", "설정 파일 열기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| {
+                settings_button("edit-config", "설정 파일 열기", theme).on_click(cx.listener(|this, _, _, cx| {
                     if let Err(e) = platform::open_file(&this.dir.join("settings.toml")) { this.status = Some(format!("{e:#}")); cx.notify(); }
                 }))))
             .child(setting("설정 다시 불러오기", "설정 파일을 직접 편집한 뒤 변경 내용을 불러옵니다.", theme,
-                button("reload-config", "다시 불러오기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx)))))
+                settings_button("reload-config", "다시 불러오기", theme).on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx)))))
             .child(div().mt_2().text_size(px(12.)).text_color(theme.muted).child(self.dir.join("settings.toml").display().to_string()));
         div()
             .flex()
@@ -323,19 +323,12 @@ impl TerminalApp {
                     .border_t_1()
                     .border_color(theme.border)
                     .child(
-                        button("reset-settings", "모두 기본값으로", theme)
-                            .px_3()
-                            .py_2()
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.reset_general_settings(cx)),
-                            ),
+                        settings_button("reset-settings", "모두 기본값으로", theme).on_click(
+                            cx.listener(|this, _, _, cx| this.reset_general_settings(cx)),
+                        ),
                     )
                     .child(
-                        button("save-settings", "설정 저장", theme)
-                            .px_5()
-                            .py_2()
-                            .bg(theme.accent)
-                            .text_color(theme.bg)
+                        primary_settings_button("save-settings", "설정 저장", theme)
                             .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx))),
                     ),
             )
@@ -426,6 +419,9 @@ fn setting(
                 .w(relative(0.43))
                 .max_w(px(360.))
                 .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_end()
                 .child(control),
         )
 }

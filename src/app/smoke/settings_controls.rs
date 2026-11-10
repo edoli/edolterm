@@ -274,7 +274,7 @@ pub(super) async fn run(
         ensure!(!font.read(cx).open, "outside click did not dismiss popup");
         root.read(cx)
             .settings_scroll
-            .set_offset(point(px(0.), -px(550.)));
+            .set_offset(point(px(0.), -px(10_000.)));
         draw(window, cx);
         window
             .render_to_image()?

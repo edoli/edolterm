@@ -392,7 +392,7 @@ impl TerminalApp {
                 );
             }
             chips = chips.child(
-                button(
+                settings_button(
                     ("shortcut-add", row),
                     if self.shortcut_capture == Some((id, None)) {
                         "키 입력 중…"
@@ -403,7 +403,6 @@ impl TerminalApp {
                 )
                 .px_2()
                 .h(px(30.))
-                .bg(theme.bg)
                 .text_color(theme.muted)
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.start_shortcut_capture(id, None, window, cx)
@@ -411,9 +410,9 @@ impl TerminalApp {
             );
             if self.draft.keybindings.contains_key(id) {
                 chips = chips.child(
-                    button(("shortcut-reset", row), "기본값", theme)
+                    settings_button(("shortcut-reset", row), "기본값", theme)
                         .px_2()
-                        .py_1()
+                        .h(px(30.))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.shortcut_capture = None;
                             this.set_shortcut_keys(id, None, cx);
@@ -470,23 +469,18 @@ impl TerminalApp {
                     .border_t_1()
                     .border_color(theme.border)
                     .child(
-                        button("reset-shortcuts", "모두 기본값으로", theme)
-                            .px_3()
-                            .py_2()
-                            .on_click(cx.listener(|this, _, _, cx| {
+                        settings_button("reset-shortcuts", "모두 기본값으로", theme).on_click(
+                            cx.listener(|this, _, _, cx| {
                                 this.draft.keybindings.clear();
                                 this.shortcut_capture = None;
                                 this.status =
                                     Some("기본 단축키로 되돌렸습니다. 저장하면 적용됩니다.".into());
                                 cx.notify();
-                            })),
+                            }),
+                        ),
                     )
                     .child(
-                        button("save-shortcuts", "설정 저장", theme)
-                            .px_5()
-                            .py_2()
-                            .bg(theme.accent)
-                            .text_color(theme.bg)
+                        primary_settings_button("save-shortcuts", "설정 저장", theme)
                             .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx))),
                     ),
             )

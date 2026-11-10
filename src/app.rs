@@ -1128,29 +1128,24 @@ impl TerminalApp {
             );
         if !self.update_state.is_busy() {
             row = row.child(
-                button("check-update", "업데이트 확인", theme)
-                    .px_3()
-                    .py_2()
+                settings_button("check-update", "업데이트 확인", theme)
                     .on_click(cx.listener(|this, _, _, cx| this.check_update(cx))),
             );
         }
         #[cfg(windows)]
         if matches!(self.update_state, State::Available(_)) {
             row = row.child(
-                button("download-update", "업데이트 다운로드", theme)
-                    .px_3()
-                    .py_2()
+                settings_button("download-update", "업데이트 다운로드", theme)
                     .on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
             );
         } else if matches!(self.update_state, State::Ready) {
             row = row.child(
-                button("apply-update", "다시 시작하여 업데이트", theme)
-                    .px_3()
-                    .py_2()
-                    .on_click(cx.listener(|this, _, window, cx| {
+                settings_button("apply-update", "다시 시작하여 업데이트", theme).on_click(
+                    cx.listener(|this, _, window, cx| {
                         this.apply_update = true;
                         this.should_close(window, cx);
-                    })),
+                    }),
+                ),
             );
         }
         row.into_any_element()
@@ -1172,6 +1167,66 @@ fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, theme: Theme
         .bg(theme.panel)
         .text_color(theme.fg)
         .hover(move |s| s.bg(theme.hover))
+        .child(label)
+}
+
+fn settings_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    theme: Theme,
+) -> Stateful<Div> {
+    settings_action(id, label, theme, false)
+}
+
+fn primary_settings_button(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    theme: Theme,
+) -> Stateful<Div> {
+    settings_action(id, label, theme, true)
+}
+
+fn settings_action(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    theme: Theme,
+    primary: bool,
+) -> Stateful<Div> {
+    let label = label.into();
+    div()
+        .id(id)
+        .role(Role::Button)
+        .aria_label(label.clone())
+        .flex()
+        .items_center()
+        .justify_center()
+        .flex_shrink_0()
+        .h(px(34.))
+        .px_3()
+        .rounded_md()
+        .border_1()
+        .border_color(if primary { theme.accent } else { theme.border })
+        .bg(if primary { theme.accent } else { theme.hover })
+        .text_color(if primary { theme.bg } else { theme.fg })
+        .cursor_pointer()
+        .tab_index(0)
+        .tab_stop(true)
+        .focus_visible(move |s| s.border_color(theme.accent))
+        .hover(move |s| {
+            s.bg(if primary {
+                theme.accent.opacity(0.9)
+            } else {
+                theme.border
+            })
+            .border_color(if primary { theme.accent } else { theme.muted })
+        })
+        .active(move |s| {
+            s.bg(if primary {
+                theme.accent.opacity(0.8)
+            } else {
+                theme.panel
+            })
+        })
         .child(label)
 }
 
