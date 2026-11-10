@@ -1,6 +1,6 @@
 [package]
 name = "edolterm"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 description = "A GPUI terminal with Alacritty's terminal core"
 license = "Apache-2.0"
