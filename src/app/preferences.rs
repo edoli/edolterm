@@ -8,6 +8,7 @@ pub(super) struct Preferences {
     pub(super) font: Entity<Select>,
     pub(super) size: Entity<NumberInput>,
     pub(super) line_height: Entity<NumberInput>,
+    pub(super) cell_width: Entity<NumberInput>,
     pub(super) history: Entity<NumberInput>,
     _subscriptions: Vec<Subscription>,
 }
@@ -180,6 +181,8 @@ impl TerminalApp {
             cx.new(|cx| NumberInput::new("글꼴 크기", self.draft.font_size, 8., 48., 1., cx));
         let line_height =
             cx.new(|cx| NumberInput::new("줄 높이 배율", self.draft.line_height, 0.5, 3., 0.1, cx));
+        let cell_width =
+            cx.new(|cx| NumberInput::new("셀 너비 배율", self.draft.cell_width, 0.3, 2., 0.05, cx));
         let history = cx.new(|cx| {
             NumberInput::new(
                 "스크롤백 줄 수",
@@ -222,6 +225,7 @@ impl TerminalApp {
             font,
             size,
             line_height,
+            cell_width,
             history,
             _subscriptions: subscriptions,
         });
@@ -245,8 +249,14 @@ impl TerminalApp {
                 .read(cx)
                 .value(cx)
                 .ok_or("줄 높이 배율에 0.5–3.0 사이의 숫자를 입력하세요.")?;
+            let cell_width = prefs
+                .cell_width
+                .read(cx)
+                .value(cx)
+                .ok_or("셀 너비 배율에 0.3–2.0 사이의 숫자를 입력하세요.")?;
             self.draft.font_size = size as f32;
             self.draft.line_height = line_height as f32;
+            self.draft.cell_width = cell_width as f32;
             self.draft.scrollback = history as usize;
         }
         Ok(())
@@ -271,6 +281,7 @@ impl TerminalApp {
             .child(setting("터미널 글꼴", "설치된 글꼴을 검색해 선택합니다. 터미널에는 고정폭 글꼴을 권장합니다.", theme, selector(&prefs.font)))
             .child(setting("글꼴 크기", "터미널의 글꼴 크기입니다. 8–48 px 사이로 설정합니다.", theme, number(&prefs.size)))
             .child(setting("줄 높이", "글꼴 크기에 곱할 배율입니다. 기본값 1.2 · 범위 0.5–3.0", theme, number(&prefs.line_height)))
+            .child(setting("셀 너비", "글꼴 크기에 곱할 가로 폭의 배율입니다. 기본값 0.6 · 범위 0.3–2.0", theme, number(&prefs.cell_width)))
             .child(setting("스크롤백", "탭마다 보관할 줄 수입니다. 최대 1,000,000줄까지 설정할 수 있습니다.", theme, number(&prefs.history)))
             .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", theme, selector(&prefs.theme)))
             .child(setting("창을 닫을 때 확인", "열린 세션이 있으면 창을 닫기 전에 확인합니다.", theme,

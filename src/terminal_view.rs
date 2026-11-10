@@ -15,6 +15,7 @@ use alacritty_terminal::{
 };
 use gpui::{prelude::*, *};
 use std::{ops::Range, path::PathBuf, sync::atomic::Ordering, time::Duration};
+use unicode_segmentation::UnicodeSegmentation;
 
 mod file_drop;
 mod layout;
@@ -815,18 +816,7 @@ impl TerminalView {
             vec!["monospace".into()]
         }));
         let size = px(self.settings.font_size);
-        let run = TextRun {
-            len: 1,
-            font: font.clone(),
-            color: theme.terminal.fg,
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-        let measurement = window
-            .text_system()
-            .shape_line("M".into(), size, &[run], None);
-        self.cell_width = f32::from(measurement.width).max(1.);
+        self.cell_width = (self.settings.font_size * self.settings.cell_width).max(1.);
         let vertical = layout::ViewportRows::fit(
             f32::from(bounds.size.height),
             self.settings.font_size,
@@ -852,7 +842,7 @@ impl TerminalView {
             quads: Vec::new(),
             glyphs: Vec::new(),
             cursor: None,
-            preedit: None,
+            preedit: Vec::new(),
             scrollbar: None,
         };
         let Some(s) = &self.session else {
@@ -1011,12 +1001,13 @@ impl TerminalView {
                 continue;
             }
             span.run.len = span.text.len();
-            let line = window.text_system().shape_line(
-                span.text.into(),
-                size,
-                &[span.run],
-                span.groupable.then_some(px(self.cell_width)),
-            );
+            let mut line =
+                window
+                    .text_system()
+                    .shape_line(span.text.into(), size, &[span.run], None);
+            if span.groupable {
+                line = layout::align_ascii_cells(line, self.cell_width);
+            }
             frame.glyphs.push((span.pos, line));
         }
         if !self.preedit.is_empty() {
@@ -1032,11 +1023,19 @@ impl TerminalView {
                 }),
                 strikethrough: None,
             };
-            let line =
-                window
-                    .text_system()
-                    .shape_line(self.preedit.clone().into(), size, &[run], None);
-            frame.preedit = Some((self.cursor_bounds.origin, line));
+            let mut column = 0;
+            for grapheme in self.preedit.graphemes(true) {
+                let mut run = run.clone();
+                run.len = grapheme.len();
+                let line =
+                    window
+                        .text_system()
+                        .shape_line(grapheme.to_owned().into(), size, &[run], None);
+                let position =
+                    self.cursor_bounds.origin + point(px(column as f32 * self.cell_width), px(0.));
+                frame.preedit.push((position, line));
+                column += unicode_width::UnicodeWidthStr::width(grapheme);
+            }
         }
         if history > 0 {
             let height =
@@ -1071,7 +1070,7 @@ struct Frame {
     quads: Vec<PaintQuad>,
     glyphs: Vec<(Point<Pixels>, ShapedLine)>,
     cursor: Option<Bounds<Pixels>>,
-    preedit: Option<(Point<Pixels>, ShapedLine)>,
+    preedit: Vec<(Point<Pixels>, ShapedLine)>,
     scrollbar: Option<PaintQuad>,
 }
 
@@ -1224,7 +1223,7 @@ impl Render for TerminalView {
                                 let _ =
                                     line.paint(pos, px(height), TextAlign::Left, None, window, cx);
                             }
-                            if let Some((pos, line)) = frame.preedit {
+                            for (pos, line) in frame.preedit {
                                 let _ =
                                     line.paint(pos, px(height), TextAlign::Left, None, window, cx);
                             }

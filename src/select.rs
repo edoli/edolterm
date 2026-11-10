@@ -67,7 +67,13 @@ impl Select {
                     cx.notify();
                 }
             }),
-            cx.on_focus_out(&focus, window, |this, _, _, cx| this.close(cx)),
+            cx.on_focus_out(&focus, window, |this, _, window, cx| {
+                // On the first opening the search field is not in the rendered
+                // focus tree yet. Moving focus into it must keep the popup open.
+                if !this.search.read(cx).focus.is_focused(window) {
+                    this.close(cx);
+                }
+            }),
             cx.observe_window_activation(window, |this, window, cx| {
                 if !window.is_window_active() {
                     this.close(cx);

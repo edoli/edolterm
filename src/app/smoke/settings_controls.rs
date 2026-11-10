@@ -97,12 +97,13 @@ pub(super) async fn run(
         Ok(())
     })??;
     handle.update(cx, |_, window, cx| -> Result<()> {
-        let (font, size, line_height, history) = {
+        let (font, size, line_height, cell_width, history) = {
             let prefs = root.read(cx).preferences.as_ref().unwrap();
             (
                 prefs.font.clone(),
                 prefs.size.clone(),
                 prefs.line_height.clone(),
+                prefs.cell_width.clone(),
                 prefs.history.clone(),
             )
         };
@@ -124,10 +125,24 @@ pub(super) async fn run(
             line_height.read(cx).input.read(cx).text == "1.4",
             "decimal step exposed rounding noise"
         );
+        ensure!(
+            cell_width.read(cx).input.read(cx).text == "0.6",
+            "default cell width formatting"
+        );
+        set_number(&cell_width, "0.6", window, cx);
+        press("up", window, cx)?;
+        press("up", window, cx)?;
+        ensure!(
+            cell_width.read(cx).input.read(cx).text == "0.7",
+            "cell width decimal step"
+        );
         root.update(cx, |app, cx| app.save_settings(cx));
         let saved = Settings::load(&root.read(cx).dir)?;
         ensure!(
-            saved.font_size == 18.5 && saved.scrollback == 12345 && saved.line_height == 1.4,
+            saved.font_size == 18.5
+                && saved.scrollback == 12345
+                && saved.line_height == 1.4
+                && saved.cell_width == 0.7,
             "numeric settings did not persist"
         );
         ensure!(
@@ -137,6 +152,14 @@ pub(super) async fn run(
                 .filter_map(|tab| tab.terminal.as_ref())
                 .all(|terminal| terminal.read(cx).settings.line_height == 1.4),
             "line height did not apply to existing terminals"
+        );
+        ensure!(
+            root.read(cx)
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.terminal.as_ref())
+                .all(|terminal| terminal.read(cx).settings.cell_width == 0.7),
+            "cell width did not apply to existing terminals"
         );
         ensure!(
             saved.theme == root.read(cx).draft.theme,
@@ -153,6 +176,10 @@ pub(super) async fn run(
             (&line_height, "inf"),
             (&line_height, "0.49"),
             (&line_height, "3.1"),
+            (&cell_width, "NaN"),
+            (&cell_width, "inf"),
+            (&cell_width, "0.29"),
+            (&cell_width, "2.01"),
             (&history, "1000001"),
             (&history, "1.5"),
             (&history, "-1"),
@@ -192,6 +219,10 @@ pub(super) async fn run(
     handle.update(cx, |_, window, cx| -> Result<()> {
         draw(window, cx);
         let font = root.read(cx).preferences.as_ref().unwrap().font.clone();
+        ensure!(
+            font.read(cx).open && font.read(cx).search.read(cx).focus.is_focused(window),
+            "font popup lost focus while loading"
+        );
         ensure!(
             font.read(cx).visible_values() == vec!["Consolas"],
             "case insensitive font search or pending query failed"

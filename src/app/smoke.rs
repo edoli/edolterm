@@ -277,6 +277,14 @@ pub fn start(
                     line_heights.push(terminal.update(cx, |view, cx| view.layout_probe(window, cx))?);
                 }
                 config::atomic_write(&root.read(cx).dir.join("line-heights.json"), serde_json::to_string_pretty(&line_heights)?.as_bytes())?;
+                let mut cell_widths = Vec::new();
+                for multiplier in [0.3, 0.6, 1.5, 2.0, 0.6] {
+                    terminal.update(cx, |view, cx| { view.settings.cell_width = multiplier; cx.notify(); });
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                    cell_widths.push(terminal.update(cx, |view, cx| view.layout_probe(window, cx))?);
+                }
+                config::atomic_write(&root.read(cx).dir.join("cell-widths.json"), serde_json::to_string_pretty(&cell_widths)?.as_bytes())?;
                 window.refresh();
                 window.draw(cx).clear(cx);
                 let metrics = terminal.update(cx, |view, cx| view.layout_probe(window, cx))?;

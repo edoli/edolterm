@@ -1,3 +1,24 @@
+/// Place each ASCII glyph at its column, independent of the font's advances.
+/// Keep shaped runs batched; adjusting their positions never scales the glyphs.
+pub(super) fn align_ascii_cells(mut line: gpui::ShapedLine, cell_width: f32) -> gpui::ShapedLine {
+    debug_assert!(line.text.is_ascii());
+    let mut runs = line.runs.clone();
+    for run in &mut runs {
+        for glyph in &mut run.glyphs {
+            glyph.position.x = gpui::px(glyph.index as f32 * cell_width);
+        }
+    }
+    *line = std::sync::Arc::new(gpui::LineLayout {
+        font_size: line.font_size,
+        width: gpui::px(line.text.len() as f32 * cell_width),
+        ascent: line.ascent,
+        descent: line.descent,
+        runs,
+        len: line.len,
+    });
+    line
+}
+
 /// Vertical cell geometry, in logical pixels. Cell heights and the grid origin
 /// land on physical pixels; incomplete rows are never exposed to the PTY.
 pub(super) struct ViewportRows {
@@ -32,16 +53,32 @@ impl super::TerminalView {
     /// Exercise the rendered grid and hit testing against the same live geometry.
     pub(crate) fn layout_probe(
         &mut self,
-        window: &gpui::Window,
+        window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> anyhow::Result<serde_json::Value> {
         use alacritty_terminal::{grid::Scroll, vte::ansi::Processor};
-        use gpui::{font, point, px};
+        use gpui::{EntityInputHandler, font, point, px};
         let session = self.session.as_ref().unwrap();
         let rows = session.size.rows;
         let bottom = self.grid_top + rows as f32 * self.cell_height;
         let viewport = f32::from(self.bounds.size.height);
         let scale = window.scale_factor();
+        let expected_width = (self.settings.font_size * self.settings.cell_width).max(1.);
+        anyhow::ensure!(
+            (self.cell_width - expected_width).abs() < 0.001,
+            "cell width does not match the configured multiplier"
+        );
+        for column in [0, session.size.cols / 2, session.size.cols - 1] {
+            let position = self.bounds.origin
+                + point(
+                    px(8. + (column as f32 + 0.5) * self.cell_width),
+                    px(self.grid_top + self.cell_height / 2.),
+                );
+            anyhow::ensure!(
+                self.grid_position(position).0 == column,
+                "column hit testing is offset"
+            );
+        }
         let expected_height = (self.settings.font_size * self.settings.line_height * scale)
             .round()
             .max(1.);
@@ -72,6 +109,9 @@ impl super::TerminalView {
             "font": self.settings.font_family,
             "font_size_dip": self.settings.font_size,
             "line_height_multiplier": self.settings.line_height,
+            "cell_width_multiplier": self.settings.cell_width,
+            "cell_width_dip": self.cell_width,
+            "cell_width_device_px": self.cell_width * scale,
             "scale": scale,
             "viewport_height_dip": viewport,
             "font_height_dip": font_height,
@@ -105,7 +145,52 @@ impl super::TerminalView {
         let mut parser: Processor = Processor::new();
         parser.advance(&mut *term, output.as_bytes());
         term.scroll_display(Scroll::Bottom);
+        drop(term);
         self.search_match = None;
+        self.replace_and_mark_text_in_range(None, "A한🙂B", None, window, cx);
+        let frame = self.prepare(self.bounds, window, cx);
+        let mut ascii_glyphs = 0;
+        for (_, line) in &frame.glyphs {
+            if !line.text.is_ascii() {
+                continue;
+            }
+            anyhow::ensure!(
+                (f32::from(line.width) - line.text.len() as f32 * self.cell_width).abs() < 0.001,
+                "ASCII decorations do not span the configured cells"
+            );
+            for run in &line.runs {
+                for glyph in &run.glyphs {
+                    anyhow::ensure!(
+                        (f32::from(glyph.position.x) - glyph.index as f32 * self.cell_width).abs()
+                            < 0.001,
+                        "ASCII glyphs are not aligned to the configured cells"
+                    );
+                    ascii_glyphs += 1;
+                }
+            }
+        }
+        anyhow::ensure!(ascii_glyphs > 0, "missing rendered ASCII probe");
+        anyhow::ensure!(frame.preedit.len() == 4, "composition lost a grapheme");
+        for ((position, _), column) in frame.preedit.iter().zip([0., 1., 3., 5.]) {
+            anyhow::ensure!(
+                (f32::from(position.x - self.cursor_bounds.left()) - column * self.cell_width)
+                    .abs()
+                    < 0.001,
+                "composition is not aligned to the configured cells"
+            );
+        }
+        for (offset, column) in [(0, 0.), (1, 1.), (2, 3.), (4, 5.)] {
+            let bounds = self
+                .bounds_for_range(offset..offset, self.bounds, window, cx)
+                .unwrap();
+            anyhow::ensure!(
+                (f32::from(bounds.left() - self.cursor_bounds.left()) - column * self.cell_width)
+                    .abs()
+                    < 0.001,
+                "IME candidate anchor does not match the configured cells"
+            );
+        }
+        self.unmark_text(window, cx);
         cx.notify();
         Ok(metrics)
     }

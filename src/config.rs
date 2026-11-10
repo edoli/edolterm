@@ -19,6 +19,8 @@ pub struct Settings {
     pub font_size: f32,
     /// Terminal row height as a multiple of the configured font size.
     pub line_height: f32,
+    /// Terminal column width as a multiple of the configured font size.
+    pub cell_width: f32,
     pub scrollback: usize,
     pub theme: String,
     pub confirm_close: bool,
@@ -42,6 +44,7 @@ impl Default for Settings {
             .into(),
             font_size: 15.,
             line_height: 1.2,
+            cell_width: 0.6,
             scrollback: 10_000,
             theme: "system".into(),
             confirm_close: true,
@@ -111,6 +114,9 @@ impl Settings {
         }
         if !self.line_height.is_finite() || !(0.5..=3.).contains(&self.line_height) {
             bail!("줄 높이 배율은 0.5–3.0이어야 합니다.");
+        }
+        if !self.cell_width.is_finite() || !(0.3..=2.).contains(&self.cell_width) {
+            bail!("셀 너비 배율은 0.3–2.0이어야 합니다.");
         }
         if self.font_family.trim().is_empty() {
             bail!("글꼴 이름을 입력하세요.");
@@ -240,6 +246,7 @@ mod tests {
         let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
         assert_eq!(legacy.windowing_behavior, WindowingBehavior::CurrentDesktop);
         assert_eq!(legacy.line_height, 1.2);
+        assert_eq!(legacy.cell_width, 0.6);
         for mode in WindowingBehavior::ALL {
             let settings = Settings {
                 windowing_behavior: mode,
@@ -275,6 +282,38 @@ mod tests {
             assert!(
                 Settings {
                     line_height,
+                    ..Settings::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn cell_width_defaults_round_trips_and_rejects_invalid_multipliers() {
+        assert_eq!(Settings::default().cell_width, 0.6);
+        for cell_width in [0.3, 0.6, 0.65, 1., 2.] {
+            let settings = Settings {
+                cell_width,
+                ..Settings::default()
+            };
+            settings.validate().unwrap();
+            let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(parsed.cell_width, cell_width);
+        }
+        for cell_width in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.,
+            0.,
+            0.29,
+            2.01,
+        ] {
+            assert!(
+                Settings {
+                    cell_width,
                     ..Settings::default()
                 }
                 .validate()
