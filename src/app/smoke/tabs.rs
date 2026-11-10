@@ -240,3 +240,236 @@ pub(super) fn run(
     draw(window, cx);
     Ok(())
 }
+
+pub(super) async fn rename(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    let (active, terminal, shell_title, target, x) =
+        handle.update(cx, |_, window, cx| -> anyhow::Result<_> {
+            let active = root.read(cx).active;
+            root.update(cx, |app, cx| {
+                app.activate(0, window, cx);
+                app.tab_scroll.set_offset(point(px(0.), px(0.)));
+                app.tab_motions.clear();
+            });
+            draw(window, cx);
+            let (_, width, _) = root.read(cx).tab_dimensions(window);
+            let inset = if cfg!(target_os = "macos") { 78. } else { 0. };
+            let x = inset + width * 1.35;
+            let target = root.read(cx).tabs[1].id;
+            let terminal = root.read(cx).tabs[1].terminal.clone().unwrap();
+            let shell_title = terminal.read(cx).title.clone();
+            click_tab(x, MouseButton::Right, 1, window, cx);
+            anyhow::ensure!(
+                root.read(cx).active == 1,
+                "right click did not select the target tab"
+            );
+            Ok((active, terminal, shell_title, target, x))
+        })??;
+    handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+        let input = root
+            .read(cx)
+            .tab_rename
+            .as_ref()
+            .expect("right click opens rename")
+            .input
+            .clone();
+        anyhow::ensure!(
+            input.read(cx).focus.is_focused(window),
+            "rename input is not focused"
+        );
+        input.update(cx, |input, cx| {
+            input.replace_and_mark_text_in_range(None, "개발", Some(2..2), window, cx);
+        });
+        window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+        Ok(())
+    })??;
+    handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+        anyhow::ensure!(
+            root.read(cx).tab_rename.is_some(),
+            "IME Enter submitted the dialog"
+        );
+        let input = root.read(cx).tab_rename.as_ref().unwrap().input.clone();
+        input.update(cx, |input, cx| {
+            input.replace_text_in_range(None, "개발 서버 🙂", window, cx)
+        });
+        let before = root.read(cx).tabs.len();
+        window.dispatch_keystroke(Keystroke::parse("ctrl-shift-t")?, cx);
+        anyhow::ensure!(
+            root.read(cx).tabs.len() == before,
+            "app shortcut escaped rename dialog"
+        );
+        draw(window, cx);
+        screenshot(root, "tabs-rename-dialog.png", window, cx)?;
+        window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+        Ok(())
+    })??;
+    handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+        draw(window, cx);
+        anyhow::ensure!(
+            root.read(cx).tab_rename.is_none(),
+            "Enter did not save rename"
+        );
+        anyhow::ensure!(
+            root.read(cx).tabs[1].custom_title.as_deref() == Some("개발 서버 🙂"),
+            "Unicode rename failed"
+        );
+        anyhow::ensure!(
+            terminal.read(cx).focus.is_focused(window),
+            "rename did not restore terminal focus"
+        );
+        terminal.update(cx, |terminal, cx| {
+            terminal.title = "새 자동 제목".into();
+            cx.emit(TerminalEvent::Metadata);
+        });
+        Ok(())
+    })??;
+    handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+        draw(window, cx);
+        anyhow::ensure!(
+            root.read(cx).tabs[1].title(cx) == "개발 서버 🙂",
+            "shell overwrote custom title"
+        );
+        assert_window_title(window, "개발 서버 🙂 — edolterm")?;
+        screenshot(root, "tabs-renamed.png", window, cx)?;
+        let saved = SavedSession::load(&root.read(cx).dir)?;
+        anyhow::ensure!(
+            saved.tabs[1].custom_title.as_deref() == Some("개발 서버 🙂"),
+            "rename was not persisted"
+        );
+
+        // Build a restored app using the same session and verify its title immediately.
+        let restored = cx.new(|cx| {
+            let app = root.read(cx);
+            TerminalApp::new(
+                app.dir.clone(),
+                app.settings.clone(),
+                app.detected.clone(),
+                Startup::Restore(saved),
+                None,
+                window,
+                cx,
+            )
+        });
+        anyhow::ensure!(
+            restored.read(cx).tabs[1].title(cx) == "개발 서버 🙂",
+            "session restore lost custom title"
+        );
+        restored.update(cx, |app, cx| {
+            for tab in &app.tabs {
+                if let Some(terminal) = &tab.terminal {
+                    terminal.update(cx, |terminal, _| terminal.shutdown());
+                }
+            }
+        });
+        drop(restored);
+        root.update(cx, |app, cx| app.activate(1, window, cx));
+        draw(window, cx);
+
+        click_tab(x, MouseButton::Left, 2, window, cx);
+        let input = root
+            .read(cx)
+            .tab_rename
+            .as_ref()
+            .expect("double click opens rename")
+            .input
+            .clone();
+        input.update(cx, |input, cx| input.set_text("discard me", window, cx));
+        window.dispatch_keystroke(Keystroke::parse("escape")?, cx);
+        draw(window, cx);
+        anyhow::ensure!(
+            root.read(cx).tab_rename.is_none(),
+            "Escape did not cancel rename"
+        );
+        anyhow::ensure!(
+            root.read(cx).tabs[1].custom_title.as_deref() == Some("개발 서버 🙂"),
+            "cancel modified the title"
+        );
+
+        click_tab(x, MouseButton::Right, 1, window, cx);
+        let input = root.read(cx).tab_rename.as_ref().unwrap().input.clone();
+        input.update(cx, |input, cx| input.set_text("   ", window, cx));
+        window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+        Ok(())
+    })??;
+    handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
+        draw(window, cx);
+        anyhow::ensure!(
+            root.read(cx).tabs[1].custom_title.is_none(),
+            "blank name did not reset title"
+        );
+        assert_window_title(window, "새 자동 제목 — edolterm")?;
+        anyhow::ensure!(
+            SavedSession::load(&root.read(cx).dir)?.tabs[1]
+                .custom_title
+                .is_none(),
+            "reset was not persisted"
+        );
+        terminal.update(cx, |terminal, cx| {
+            terminal.title = shell_title;
+            cx.emit(TerminalEvent::Metadata);
+        });
+        root.update(cx, |app, cx| {
+            anyhow::ensure!(app.tabs[1].id == target, "rename changed tab order");
+            app.activate(active, window, cx);
+            Ok(())
+        })?;
+        draw(window, cx);
+        Ok(())
+    })??;
+    Ok(())
+}
+
+fn click_tab(x: f32, button: MouseButton, count: usize, window: &mut Window, cx: &mut App) {
+    move_to(x, 18., false, window, cx);
+    window.dispatch_event(
+        PlatformInput::MouseDown(MouseDownEvent {
+            position: point(px(x), px(18.)),
+            button,
+            click_count: count,
+            ..Default::default()
+        }),
+        cx,
+    );
+    draw(window, cx);
+    window.dispatch_event(
+        PlatformInput::MouseUp(MouseUpEvent {
+            position: point(px(x), px(18.)),
+            button,
+            click_count: count,
+            ..Default::default()
+        }),
+        cx,
+    );
+    draw(window, cx);
+}
+
+fn assert_window_title(window: &Window, expected: &str) -> anyhow::Result<()> {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+        let Ok(RawWindowHandle::Win32(handle)) =
+            HasWindowHandle::window_handle(window).map(|handle| handle.as_raw())
+        else {
+            anyhow::bail!("expected Windows window handle");
+        };
+        let hwnd = handle.hwnd.get() as windows_sys::Win32::Foundation::HWND;
+        let title = unsafe {
+            let mut text = vec![0; GetWindowTextLengthW(hwnd) as usize + 1];
+            let len = GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32);
+            String::from_utf16_lossy(&text[..len as usize])
+        };
+        anyhow::ensure!(
+            title == expected,
+            "window title: {title:?}, expected: {expected:?}"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    anyhow::ensure!(window.window_title() == expected, "window title mismatch");
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let _ = (window, expected);
+    Ok(())
+}

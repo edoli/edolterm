@@ -171,6 +171,12 @@ pub fn start(
             failure = Some(format!("{e:#}"));
         }
         #[cfg(feature = "ui-tests")]
+        if mode == "tabs" && failure.is_none()
+            && let Err(e) = tabs::rename(&root, handle, cx).await
+        {
+            failure = Some(format!("{e:#}"));
+        }
+        #[cfg(feature = "ui-tests")]
         if mode == "tabs" && failure.is_none() {
             let result = handle.update(cx, |_, window, cx| tabs::run(&root, window, cx));
             if let Err(e) = result.and_then(|r| r) { failure = Some(format!("{e:#}")); }

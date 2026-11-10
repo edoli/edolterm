@@ -21,10 +21,11 @@ mod taskbar;
 mod windows;
 use config::shortcuts::{self as keybindings, Bindings};
 use shortcuts::SettingsPage;
-use tabs::{TabDrag, TabMotion};
+use tabs::{TabDrag, TabMotion, TabRename};
 
 struct Tab {
     id: u64,
+    custom_title: Option<String>,
     terminal: Option<Entity<TerminalView>>,
     _subscription: Option<Subscription>,
 }
@@ -70,6 +71,7 @@ pub struct TerminalApp {
     tab_scroll_drag: bool,
     tab_drag: Option<TabDrag>,
     tab_motions: Vec<TabMotion>,
+    tab_rename: Option<TabRename>,
     menu: bool,
     menu_index: usize,
     confirm: bool,
@@ -170,6 +172,7 @@ impl TerminalApp {
             tab_scroll_drag: false,
             tab_drag: None,
             tab_motions: Vec::new(),
+            tab_rename: None,
             menu: false,
             menu_index: 0,
             confirm: false,
@@ -217,6 +220,7 @@ impl TerminalApp {
                         restored_active = this.tabs.len();
                     }
                     this.create_terminal(profile, Some(tab.cwd), window, cx);
+                    this.tabs.last_mut().unwrap().custom_title = tab.custom_title;
                 }
             }
             if !this.tabs.is_empty() {
@@ -284,12 +288,12 @@ impl TerminalApp {
         let subscription = cx.subscribe_in(
             &terminal,
             window,
-            move |this, terminal, e: &TerminalEvent, window, cx| {
+            move |this, _, e: &TerminalEvent, window, cx| {
                 if matches!(e, TerminalEvent::Exited(true)) {
                     this.close_tab(id, window, cx);
                 } else {
                     if this.tabs.get(this.active).is_some_and(|t| t.id == id) {
-                        window.set_window_title(&format!("{} — edolterm", terminal.read(cx).title));
+                        this.update_window_title(window, cx);
                     }
                     cx.notify();
                 }
@@ -297,6 +301,7 @@ impl TerminalApp {
         );
         self.tabs.push(Tab {
             id,
+            custom_title: None,
             terminal: Some(terminal),
             _subscription: Some(subscription),
         });
@@ -307,6 +312,7 @@ impl TerminalApp {
             return;
         }
         self.active = index;
+        self.tab_rename = None;
         self.shortcut_capture = None;
         self.search_visible = false;
         self.menu = false;
@@ -314,11 +320,10 @@ impl TerminalApp {
         if let Some(terminal) = self.active_terminal() {
             terminal.update(cx, |terminal, cx| terminal.start(true, cx));
             terminal.read(cx).focus.clone().focus(window, cx);
-            window.set_window_title(&format!("{} — edolterm", terminal.read(cx).title));
         } else {
             self.focus.focus(window, cx);
-            window.set_window_title("설정 — edolterm");
         }
+        self.update_window_title(window, cx);
         cx.notify();
     }
     fn close_tab(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
@@ -348,6 +353,7 @@ impl TerminalApp {
         let index = self.tabs.iter().position(|t| t.id == 0).unwrap_or_else(|| {
             self.tabs.push(Tab {
                 id: 0,
+                custom_title: None,
                 terminal: None,
                 _subscription: None,
             });
@@ -399,6 +405,7 @@ impl TerminalApp {
             });
         if self.settings.confirm_close && (active || other_active) {
             self.confirm = true;
+            self.tab_rename = None;
             self.menu = false;
             self.focus.focus(window, cx);
             cx.notify();
@@ -418,6 +425,7 @@ impl TerminalApp {
                 Some(SavedTab {
                     profile_id: t.profile.id.clone(),
                     cwd: t.working_directory(),
+                    custom_title: tab.custom_title.clone(),
                 })
             })
             .collect();
@@ -651,6 +659,10 @@ impl TerminalApp {
             }
             cx.stop_propagation();
             cx.notify();
+            return;
+        }
+        // The rename dialog owns keyboard input, including text editing shortcuts.
+        if self.tab_rename_key(e, window, cx) {
             return;
         }
         if self.menu && !m.control && !m.alt {
@@ -1439,6 +1451,9 @@ impl Render for TerminalApp {
                     ),
             );
             root = root.child(self.profile_menu(window, cx));
+        }
+        if self.tab_rename.is_some() {
+            root = root.child(self.tab_rename_dialog(cx));
         }
         if self.confirm || self.closing {
             let closing = self.closing;

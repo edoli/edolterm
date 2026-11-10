@@ -317,6 +317,7 @@ mod tests {
             saved.tabs.push(SavedTab {
                 profile_id: profile.id.clone(),
                 cwd: session.working_directory(),
+                custom_title: None,
             });
             stop_and_wait(&session);
         }

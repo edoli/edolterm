@@ -3,6 +3,23 @@ use super::*;
 const DRAG_THRESHOLD: f32 = 5.;
 const SLIDE_DURATION: Duration = Duration::from_millis(140);
 
+pub(super) struct TabRename {
+    id: u64,
+    pub(super) input: Entity<TextField>,
+    _subscription: Subscription,
+}
+
+impl Tab {
+    pub(super) fn title(&self, cx: &App) -> String {
+        self.custom_title.clone().unwrap_or_else(|| {
+            self.terminal
+                .as_ref()
+                .map(|terminal| terminal.read(cx).title.clone())
+                .unwrap_or_else(|| "설정".into())
+        })
+    }
+}
+
 pub(super) struct TabDrag {
     pub id: u64,
     pub started: bool,
@@ -30,6 +47,149 @@ impl TabMotion {
 }
 
 impl TerminalApp {
+    pub(super) fn update_window_title(&self, window: &mut Window, cx: &App) {
+        if let Some(tab) = self.tabs.get(self.active) {
+            window.set_window_title(&format!("{} — edolterm", tab.title(cx)));
+        }
+    }
+
+    fn begin_tab_rename(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| tab.id == id && tab.terminal.is_some())
+        else {
+            return;
+        };
+        self.finish_tab_drag(true, window, cx);
+        self.activate(index, window, cx);
+        let title = self.tabs[index].title(cx);
+        let input = cx.new(|cx| TextField::new(title, "탭 이름", cx));
+        let subscription = cx.subscribe_in(
+            &input,
+            window,
+            |this, _, event: &FieldEvent, window, cx| match event {
+                FieldEvent::Submit => this.finish_tab_rename(true, window, cx),
+                FieldEvent::Cancel => this.finish_tab_rename(false, window, cx),
+                FieldEvent::Changed => {}
+            },
+        );
+        input.update(cx, |input, cx| input.select_all(window, cx));
+        self.tab_rename = Some(TabRename {
+            id,
+            input,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn finish_tab_rename(&mut self, save: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(rename) = self.tab_rename.take() else {
+            return;
+        };
+        if save {
+            let title = rename.input.read(cx).text.trim().to_owned();
+            if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == rename.id) {
+                tab.custom_title = (!title.is_empty()).then_some(title);
+            }
+            self.update_window_title(window, cx);
+            self.persist(window, cx);
+        }
+        self.restore_focus(window, cx);
+        cx.notify();
+    }
+
+    pub(super) fn tab_rename_key(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(rename) = &self.tab_rename else {
+            return false;
+        };
+        if event.prefer_character_input || rename.input.read(cx).is_composing() {
+            return true;
+        }
+        if event.keystroke.key == "escape" {
+            self.finish_tab_rename(false, window, cx);
+            cx.stop_propagation();
+        }
+        true
+    }
+
+    pub(super) fn tab_rename_dialog(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = Theme::from_setting(&self.settings.theme, cx);
+        let rename = self.tab_rename.as_ref().expect("rename dialog is open");
+        div()
+            .id("rename-tab-backdrop")
+            .occlude()
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(theme.overlay)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    this.finish_tab_rename(false, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
+            .child(
+                div()
+                    .id("rename-tab-dialog")
+                    .flex()
+                    .flex_col()
+                    .gap_4()
+                    .w(px(420.))
+                    .max_w_full()
+                    .p_6()
+                    .rounded_lg()
+                    .bg(theme.panel)
+                    .border_1()
+                    .border_color(theme.border)
+                    .shadow_lg()
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .child(
+                        div()
+                            .text_size(px(18.))
+                            .font_weight(FontWeight::BOLD)
+                            .child("탭 이름 변경"),
+                    )
+                    .child(rename.input.clone())
+                    .child(
+                        div()
+                            .text_size(px(12.))
+                            .text_color(theme.muted)
+                            .child("이름을 비우면 셸이 제공하는 자동 제목을 사용합니다."),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .justify_end()
+                            .gap_2()
+                            .child(
+                                settings_button("cancel-rename-tab", "취소", theme).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.finish_tab_rename(false, window, cx)
+                                    }),
+                                ),
+                            )
+                            .child(
+                                primary_settings_button("save-rename-tab", "저장", theme).on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.finish_tab_rename(true, window, cx)
+                                    }),
+                                ),
+                            ),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn tab_inset() -> f32 {
         if cfg!(target_os = "macos") { 78. } else { 0. }
     }
@@ -243,19 +403,15 @@ impl TerminalApp {
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let id = tab.id;
         let active = index == self.active;
-        let (title, leading, bell) = if let Some(terminal) = &tab.terminal {
+        let title = tab.title(cx);
+        let (leading, bell) = if let Some(terminal) = &tab.terminal {
             let terminal = terminal.read(cx);
             (
-                terminal.title.clone(),
                 icons::profiles::element(&terminal.profile.program, 16., cx),
                 terminal.bell,
             )
         } else {
-            (
-                "설정".into(),
-                icon(Icon::Settings, 16.).into_any_element(),
-                false,
-            )
+            (icon(Icon::Settings, 16.).into_any_element(), false)
         };
         div()
             .id(("tab", id))
@@ -344,15 +500,30 @@ impl TerminalApp {
             )
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event, window, cx| {
-                    this.begin_tab_drag(id, event, window, cx);
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    if event.click_count == 2 && id != 0 {
+                        this.begin_tab_rename(id, window, cx);
+                        cx.stop_propagation();
+                    } else {
+                        this.begin_tab_drag(id, event, window, cx);
+                    }
                 }),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
+                if this.tab_rename.is_some() {
+                    return;
+                }
                 if let Some(index) = this.tabs.iter().position(|tab| tab.id == id) {
                     this.activate(index, window, cx);
                 }
             }))
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(move |this, _, window, cx| {
+                    this.begin_tab_rename(id, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _, window, cx| {

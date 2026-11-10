@@ -223,6 +223,8 @@ pub struct SavedSession {
 pub struct SavedTab {
     pub profile_id: String,
     pub cwd: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
 }
 
 impl SavedSession {
@@ -241,6 +243,22 @@ impl SavedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_tab_titles_are_optional_and_round_trip() {
+        let legacy = r#"{"tabs":[{"profile_id":"shell","cwd":"."}]}"#;
+        let mut saved: SavedSession = serde_json::from_str(legacy).unwrap();
+        assert_eq!(saved.tabs[0].custom_title, None);
+        assert!(
+            !serde_json::to_string(&saved)
+                .unwrap()
+                .contains("custom_title")
+        );
+        saved.tabs[0].custom_title = Some("서버 🙂".into());
+        let restored: SavedSession =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        assert_eq!(restored.tabs[0].custom_title.as_deref(), Some("서버 🙂"));
+    }
+
     #[test]
     fn legacy_settings_default_to_current_desktop_and_all_modes_round_trip() {
         let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
