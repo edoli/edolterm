@@ -279,6 +279,7 @@ impl TerminalApp {
                         .aria_selected(self.settings_page == page)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.settings_page = page;
+                            this.settings_scroll_drag = None;
                             this.shortcut_capture = None;
                             cx.notify();
                         }))
@@ -449,15 +450,13 @@ impl TerminalApp {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .child(
-                div()
-                    .id("shortcuts-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.shortcuts_scroll)
-                    .child(content),
-            )
+            .child(self.settings_scroll_area(
+                "shortcuts-scroll",
+                &self.shortcuts_scroll,
+                content,
+                theme,
+                cx,
+            ))
             .child(
                 div()
                     .flex()

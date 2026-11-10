@@ -13,6 +13,7 @@ use std::{
 };
 
 mod preferences;
+mod scrollbar;
 mod shortcuts;
 #[cfg(debug_assertions)]
 mod smoke;
@@ -85,6 +86,7 @@ pub struct TerminalApp {
     _subscriptions: Vec<Subscription>,
     settings_scroll: ScrollHandle,
     shortcuts_scroll: ScrollHandle,
+    settings_scroll_drag: Option<Pixels>,
     settings_page: SettingsPage,
     shortcut_capture: Option<(&'static str, Option<usize>)>,
     shortcut_bindings: Bindings,
@@ -186,6 +188,7 @@ impl TerminalApp {
             _subscriptions: subscriptions,
             settings_scroll: ScrollHandle::new(),
             shortcuts_scroll: ScrollHandle::new(),
+            settings_scroll_drag: None,
             settings_page: SettingsPage::General,
             shortcut_capture: None,
             shortcut_bindings,

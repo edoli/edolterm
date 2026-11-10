@@ -59,6 +59,7 @@ pub(super) async fn run(
             app.settings_tab(window, cx);
         });
         draw(window, cx);
+        scrollbars(root, window, cx)?;
         ensure!(
             !Select::font_discovery_started(cx),
             "opening settings enumerated fonts"
@@ -288,5 +289,134 @@ pub(super) async fn run(
         });
         Ok(())
     })??;
+    Ok(())
+}
+
+fn scrollbars(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Result<()> {
+    for (page, name) in [
+        (SettingsPage::General, "general"),
+        (SettingsPage::Shortcuts, "shortcuts"),
+    ] {
+        root.update(cx, |app, cx| {
+            app.settings_page = page;
+            cx.notify();
+        });
+        draw(window, cx);
+        let scroll = match page {
+            SettingsPage::General => root.read(cx).settings_scroll.clone(),
+            SettingsPage::Shortcuts => root.read(cx).shortcuts_scroll.clone(),
+        };
+        let bounds = scroll.bounds();
+        let max = scroll.max_offset().y;
+        ensure!(
+            max > px(0.),
+            "{name} settings must overflow in the test window"
+        );
+        scroll.set_offset(point(px(0.), px(0.)));
+        draw(window, cx);
+        window
+            .render_to_image()?
+            .save(root.read(cx).dir.join(format!("{name}-scrollbar-top.png")))?;
+
+        // Wheel input over the scrollbar still reaches the content behind it.
+        let position = point(bounds.right() - px(6.), bounds.center().y);
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position,
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::Scroll(ScrollEvent {
+                position,
+                delta: ScrollDelta::Lines(point(0., -3.)),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
+            }),
+            cx,
+        );
+        draw(window, cx);
+        ensure!(
+            scroll.offset().y < px(0.),
+            "{name} scrollbar blocked the wheel"
+        );
+
+        // Clicking the track jumps toward that position.
+        click(point(position.x, bounds.bottom() - px(2.)), window, cx);
+        ensure!(
+            (scroll.offset().y + max).abs() < px(1.),
+            "{name} scrollbar track click"
+        );
+        scroll.set_offset(point(px(0.), px(0.)));
+        draw(window, cx);
+
+        let height = bounds.size.height;
+        let thumb = (height * (height / (height + max)))
+            .max(px(24.))
+            .min(height);
+        let start = point(position.x, bounds.top() + thumb / 2.);
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: start,
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent {
+                position: start,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }),
+            cx,
+        );
+        draw(window, cx);
+        ensure!(
+            root.read(cx).settings_scroll_drag.is_some(),
+            "{name} scrollbar thumb did not grab"
+        );
+        let outside = point(start.x - px(80.), bounds.bottom() + px(40.));
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: outside,
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            }),
+            cx,
+        );
+        draw(window, cx);
+        ensure!(
+            (scroll.offset().y + max).abs() < px(1.),
+            "{name} scrollbar drag outside the track"
+        );
+        window.dispatch_event(
+            PlatformInput::MouseUp(MouseUpEvent {
+                position: outside,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }),
+            cx,
+        );
+        draw(window, cx);
+        ensure!(
+            root.read(cx).settings_scroll_drag.is_none(),
+            "{name} scrollbar did not release outside the track"
+        );
+        window.render_to_image()?.save(
+            root.read(cx)
+                .dir
+                .join(format!("{name}-scrollbar-bottom.png")),
+        )?;
+        scroll.set_offset(point(px(0.), px(0.)));
+    }
+    root.update(cx, |app, cx| {
+        app.settings_page = SettingsPage::General;
+        cx.notify();
+    });
+    draw(window, cx);
     Ok(())
 }

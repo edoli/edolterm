@@ -305,15 +305,13 @@ impl TerminalApp {
             .flex_1()
             .min_w_0()
             .min_h_0()
-            .child(
-                div()
-                    .id("settings-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.settings_scroll)
-                    .child(content),
-            )
+            .child(self.settings_scroll_area(
+                "settings-scroll",
+                &self.settings_scroll,
+                content,
+                theme,
+                cx,
+            ))
             .child(
                 div()
                     .flex()
