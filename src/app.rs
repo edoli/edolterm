@@ -924,11 +924,14 @@ impl TerminalApp {
                     .window_control_area(WindowControlArea::Drag),
             )
             .when(controls, |d| d.child(window_controls(window, theme)))
-            // Keep the divider gap under the active tab, including drag/slide motion.
+            // Leave the whole scrollbar clear, or just the active tab when it is absent.
             // Read the scroll offset in prepaint so tab reveal/scroll stays aligned.
             .child(
                 canvas(
                     move |_, _, _| {
+                        if overflow {
+                            return (left, left + tabs_extent);
+                        }
                         let offset = f32::from(scroll.offset().x);
                         let tab_left = left
                             + dragged_left
