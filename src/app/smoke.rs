@@ -14,6 +14,8 @@ mod keys;
 #[cfg(feature = "ui-tests")]
 mod scroll;
 #[cfg(feature = "ui-tests")]
+mod settings_controls;
+#[cfg(feature = "ui-tests")]
 mod shortcuts;
 #[cfg(feature = "ui-tests")]
 mod tabs;
@@ -45,6 +47,17 @@ pub fn start(
         return;
     }
     let handle = window.window_handle();
+    #[cfg(feature = "ui-tests")]
+    if mode == "settings" {
+        assert!(
+            root.read(cx).preferences.is_none(),
+            "settings controls allocated at startup"
+        );
+        assert!(
+            !crate::select::Select::font_discovery_started(cx),
+            "fonts enumerated at startup"
+        );
+    }
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_millis(800)).await;
         let mut failure = None;
@@ -118,6 +131,14 @@ pub fn start(
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
         if !output_ok && failure.is_none() { failure = Some("Unicode PTY output timed out".into()); }
+        #[cfg(feature = "ui-tests")]
+        if mode == "settings" && failure.is_none()
+            && let Err(e) = settings_controls::run(&root, handle, cx).await
+        {
+            eprintln!("Settings controls failure: {e:#}");
+            let _ = handle.update(cx, |_, window, cx| root.update(cx, |app, cx| app.activate(0, window, cx)));
+            failure = Some(format!("{e:#}"));
+        }
         #[cfg(feature = "ui-tests")]
         if mode == "shortcuts" && failure.is_none() {
             let result = handle.update(cx, |_, window, cx| shortcuts::run(&root, window, cx));

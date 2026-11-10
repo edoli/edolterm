@@ -23,9 +23,9 @@ macro_rules! icons {
 }
 
 icons! {
-    Close => "close", Trash => "trash", Plus => "plus", Minus => "minus", ChevronDown => "chevron-down",
+    Close => "close", Trash => "trash", Plus => "plus", ChevronDown => "chevron-down",
     Terminal => "terminal", Settings => "settings",
-    ArrowUp => "arrow-up", ArrowDown => "arrow-down", Square => "square", CheckSquare => "check-square",
+    ArrowUp => "arrow-up", ArrowDown => "arrow-down",
 }
 
 #[derive(IntoElement)]

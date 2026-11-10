@@ -33,12 +33,30 @@ pub fn utf8_offset(text: &str, offset: usize) -> usize {
 }
 
 impl TextField {
+    pub fn is_composing(&self) -> bool {
+        self.marked.is_some()
+    }
+
+    pub fn set_text(
+        &mut self,
+        text: impl Into<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.text = text.into();
+        self.selected = self.text.len()..self.text.len();
+        self.marked = None;
+        window.notify_text_input_changed(&self.focus);
+        cx.emit(FieldEvent::Changed);
+        cx.notify();
+    }
+
     pub fn new(text: impl Into<String>, placeholder: &str, cx: &mut Context<Self>) -> Self {
         let text = text.into();
         let len = text.len();
         Self {
             text,
-            focus: cx.focus_handle(),
+            focus: cx.focus_handle().tab_stop(true),
             placeholder: placeholder.into(),
             selected: len..len,
             marked: None,

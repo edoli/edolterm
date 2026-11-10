@@ -6,6 +6,7 @@ mod icons;
 mod instance;
 mod keys;
 mod platform;
+mod select;
 mod session;
 mod terminal_view;
 mod text_field;

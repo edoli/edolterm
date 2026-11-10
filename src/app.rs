@@ -12,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod preferences;
 mod shortcuts;
 #[cfg(debug_assertions)]
 mod smoke;
@@ -73,8 +74,7 @@ pub struct TerminalApp {
     config_error: bool,
     search_visible: bool,
     search: Entity<TextField>,
-    font_input: Entity<TextField>,
-    history_input: Entity<TextField>,
+    preferences: Option<preferences::Preferences>,
     _subscriptions: Vec<Subscription>,
     settings_scroll: ScrollHandle,
     shortcuts_scroll: ScrollHandle,
@@ -100,10 +100,6 @@ impl TerminalApp {
         cx: &mut Context<Self>,
     ) -> Self {
         let search = cx.new(|cx| TextField::new("", "터미널에서 찾기", cx));
-        let font_input =
-            cx.new(|cx| TextField::new(settings.font_family.clone(), "고정폭 글꼴 이름", cx));
-        let history_input =
-            cx.new(|cx| TextField::new(settings.scrollback.to_string(), "10000", cx));
         let subscriptions = vec![
             cx.subscribe_in(
                 &search,
@@ -140,12 +136,7 @@ impl TerminalApp {
                     this.shortcut_bindings =
                         Bindings::new(&this.settings.keybindings).expect("validated settings");
                     this.shortcut_capture = None;
-                    this.font_input = cx.new(|cx| {
-                        TextField::new(this.settings.font_family.clone(), "고정폭 글꼴", cx)
-                    });
-                    this.history_input = cx.new(|cx| {
-                        TextField::new(this.settings.scrollback.to_string(), "10000", cx)
-                    });
+                    this.preferences = None;
                     this.profiles =
                         platform::merge_profiles(this.detected.clone(), &this.settings.profiles);
                     for tab in &this.tabs {
@@ -183,8 +174,7 @@ impl TerminalApp {
             config_error: error.is_some(),
             search_visible: false,
             search,
-            font_input,
-            history_input,
+            preferences: None,
             _subscriptions: subscriptions,
             settings_scroll: ScrollHandle::new(),
             shortcuts_scroll: ScrollHandle::new(),
@@ -555,10 +545,7 @@ impl TerminalApp {
             allow_osc52: self.draft.allow_osc52,
             ..Settings::default()
         };
-        self.font_input =
-            cx.new(|cx| TextField::new(self.draft.font_family.clone(), "고정폭 글꼴", cx));
-        self.history_input =
-            cx.new(|cx| TextField::new(self.draft.scrollback.to_string(), "10000", cx));
+        self.preferences = None;
         self.status = Some("일반 설정을 기본값으로 되돌렸습니다. 저장하면 적용됩니다.".into());
         cx.notify();
     }
@@ -571,14 +558,11 @@ impl TerminalApp {
             cx.notify();
             return;
         }
-        self.draft.font_family = self.font_input.read(cx).text.trim().into();
-        let history = self.history_input.read(cx).text.trim().parse();
-        let Ok(history) = history else {
-            self.status = Some("스크롤백에 0–1000000 사이의 정수를 입력하세요.".into());
+        if let Err(error) = self.read_preferences(cx) {
+            self.status = Some(error.into());
             cx.notify();
             return;
-        };
-        self.draft.scrollback = history;
+        }
         match self.draft.save(&self.dir) {
             Ok(()) => {
                 self.settings = self.draft.clone();
@@ -609,10 +593,7 @@ impl TerminalApp {
                 self.shortcut_bindings =
                     Bindings::new(&self.settings.keybindings).expect("validated settings");
                 self.shortcut_capture = None;
-                self.font_input = cx
-                    .new(|cx| TextField::new(self.settings.font_family.clone(), "고정폭 글꼴", cx));
-                self.history_input =
-                    cx.new(|cx| TextField::new(self.settings.scrollback.to_string(), "10000", cx));
+                self.preferences = None;
                 self.profiles =
                     platform::merge_profiles(self.detected.clone(), &self.settings.profiles);
                 for tab in &self.tabs {
@@ -1174,139 +1155,6 @@ impl TerminalApp {
         }
         row.into_any_element()
     }
-
-    fn general_settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::from_setting(&self.settings.theme, cx);
-        let mut profiles = div().flex().flex_wrap().gap_2();
-        for (index, p) in self.profiles.iter().enumerate() {
-            let id = p.id.clone();
-            let selected = self.draft.default_profile == p.id
-                || self.draft.default_profile.is_empty() && index == 0;
-            profiles = profiles.child(
-                button(("default-profile", index), p.name.clone(), theme)
-                    .px_3()
-                    .py_2()
-                    .border_1()
-                    .border_color(if selected { theme.accent } else { theme.border })
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.draft.default_profile = id.clone();
-                        cx.notify();
-                    })),
-            );
-        }
-        let behavior = div().flex().flex_col().gap_2().children(
-            config::WindowingBehavior::ALL
-                .into_iter()
-                .enumerate()
-                .map(|(index, choice)| {
-                    button(("windowing-behavior", index), choice.label(), theme)
-                        .justify_start()
-                        .px_3()
-                        .py_2()
-                        .border_1()
-                        .border_color(if self.draft.windowing_behavior == choice {
-                            theme.accent
-                        } else {
-                            theme.border
-                        })
-                        .aria_selected(self.draft.windowing_behavior == choice)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.draft.windowing_behavior = choice;
-                            cx.notify();
-                        }))
-                }),
-        );
-        let themes = div().flex().gap_2().children(
-            [("dark", "다크"), ("light", "라이트"), ("system", "시스템")]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (value, label))| {
-                    button(("theme", index), label, theme)
-                        .px_4()
-                        .py_2()
-                        .border_1()
-                        .border_color(if self.draft.theme == value {
-                            theme.accent
-                        } else {
-                            theme.border
-                        })
-                        .aria_selected(self.draft.theme == value)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.draft.theme = value.into();
-                            cx.notify();
-                        }))
-                }),
-        );
-        let content = div().flex().flex_col().gap_5().w_full().max_w(px(820.)).mx_auto().p_8()
-            .child(self.update_view(theme, cx))
-            .child(div().text_size(px(25.)).font_weight(FontWeight::BOLD).child("설정"))
-            .child(div().text_color(theme.muted).child("설정은 저장하면 열린 터미널에도 적용됩니다."))
-            .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸", theme, profiles))
-            .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창 · 대상 창이 없으면 새 창 생성", theme, behavior))
-            .child(setting("터미널 글꼴", "설치된 고정폭 글꼴 이름 · 한글과 이모지는 대체 글꼴 사용", theme, self.font_input.clone()))
-            .child(setting("글꼴 크기", "8–48 px", theme, div().flex().items_center().gap_3()
-                .child(icon_button("font-smaller", Icon::Minus, "글꼴 크기 줄이기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size - 1.).max(8.); cx.notify(); })))
-                .child(format!("{} px", self.draft.font_size))
-                .child(icon_button("font-larger", Icon::Plus, "글꼴 크기 늘리기", theme).size(px(32.)).on_click(cx.listener(|this, _, _, cx| { this.draft.font_size = (this.draft.font_size + 1.).min(48.); cx.notify(); })))))
-            .child(setting("스크롤백", "탭당 보관할 줄 수 · 최대 1,000,000줄", theme, self.history_input.clone()))
-            .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", theme, themes))
-            .child(toggle("confirm-close", "창을 닫을 때 열린 세션 확인", self.draft.confirm_close, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.confirm_close = !this.draft.confirm_close; cx.notify(); })))
-            .child(toggle("restore-session", "다음 실행 시 탭과 시작 폴더 복원", self.draft.restore_session, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.restore_session = !this.draft.restore_session; cx.notify(); })))
-            .child(div().text_size(px(12.)).text_color(theme.muted).child("복원할 때 셸은 새로 실행됩니다. 실행 중인 명령과 출력은 복원되지 않습니다."))
-            .child(div().h(px(1.)).bg(theme.border))
-            .child(div().text_size(px(16.)).font_weight(FontWeight::BOLD).child("사용자 지정 프로필"))
-            .child(div().text_color(theme.muted).child("설정 파일의 [[profiles]]에서 실행 파일, 인자, 시작 폴더, 환경변수를 추가할 수 있습니다. 파일을 편집한 뒤 다시 불러오세요."))
-            .child(div().text_size(px(12.)).text_color(theme.muted).child(self.dir.join("settings.toml").display().to_string()))
-            .child(div().flex().gap_2()
-                .child(button("edit-config", "설정 파일 열기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| {
-                    if let Err(e) = platform::open_file(&this.dir.join("settings.toml")) { this.status = Some(format!("{e:#}")); cx.notify(); }
-                })))
-                .child(button("reload-config", "다시 불러오기", theme).px_3().py_2().on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx)))));
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .child(
-                div()
-                    .id("settings-scroll")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.settings_scroll)
-                    .child(content),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .px_6()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(
-                        button("reset-settings", "모두 기본값으로", theme)
-                            .px_3()
-                            .py_2()
-                            .on_click(
-                                cx.listener(|this, _, _, cx| this.reset_general_settings(cx)),
-                            ),
-                    )
-                    .child(
-                        button("save-settings", "설정 저장", theme)
-                            .px_5()
-                            .py_2()
-                            .bg(theme.accent)
-                            .text_color(theme.bg)
-                            .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx))),
-                    ),
-            )
-            .into_any_element()
-    }
 }
 
 fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, theme: Theme) -> Stateful<Div> {
@@ -1347,43 +1195,6 @@ fn icon_button(
         .text_color(theme.fg)
         .hover(move |s| s.bg(theme.hover))
         .child(icon(name, 16.))
-}
-
-fn toggle(id: &'static str, label: &'static str, enabled: bool, theme: Theme) -> Stateful<Div> {
-    icon_button(
-        id,
-        if enabled {
-            Icon::CheckSquare
-        } else {
-            Icon::Square
-        },
-        label,
-        theme,
-    )
-    .justify_start()
-    .gap_2()
-    .px_3()
-    .py_2()
-    .child(label)
-}
-fn setting(
-    label: &'static str,
-    description: &'static str,
-    theme: Theme,
-    control: impl IntoElement,
-) -> Div {
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .child(div().font_weight(FontWeight::MEDIUM).child(label))
-        .child(
-            div()
-                .text_size(px(12.))
-                .text_color(theme.description)
-                .child(description),
-        )
-        .child(control)
 }
 
 fn window_controls(window: &Window, theme: Theme) -> AnyElement {
@@ -1450,6 +1261,7 @@ impl Render for TerminalApp {
         let content = if let Some(t) = self.active_terminal() {
             div().flex_1().min_h_0().child(t).into_any_element()
         } else {
+            self.ensure_preferences(window, cx);
             self.settings_view(cx)
         };
         let mut root = div()
