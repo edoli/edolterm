@@ -39,7 +39,7 @@ fn main() {
     let mut icon = ico::IconDir::new(ico::ResourceType::Icon);
 
     // Render each size from the vector source, including common Windows DPI scales.
-    for size in [16, 20, 24, 32, 40, 48, 64, 128, 256] {
+    for size in [16, 20, 24, 30, 32, 36, 40, 48, 60, 64, 72, 80, 96, 128, 256] {
         let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size)
             .expect("failed to allocate the app icon image");
         let scale = (size as f32 / tree.size().width()).min(size as f32 / tree.size().height());

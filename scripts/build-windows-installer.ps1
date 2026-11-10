@@ -42,7 +42,7 @@ $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
 $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory |
     Where-Object { $_.Name -match '^10\.' -and (Test-Path -LiteralPath (Join-Path $_.FullName 'x64/makeappx.exe')) } |
     Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
-if (-not $sdk) { throw 'Windows SDK MakeAppx, SignTool, and mt.exe are required.' }
+if (-not $sdk) { throw 'Windows SDK MakeAppx, MakePri, SignTool, and mt.exe are required.' }
 $sdkBin = Join-Path $sdk.FullName 'x64'
 
 $exeVersion = (Get-Item -LiteralPath (Join-Path $payload 'edolterm.exe')).VersionInfo.ProductVersion
@@ -85,26 +85,15 @@ foreach ($file in @($app, (Join-Path $payload 'Edolterm.ExplorerCommand.dll'))) 
 [xml]$manifest = Get-Content -LiteralPath (Join-Path $source 'AppxManifest.xml') -Raw
 $manifest.Package.Identity.Version = "$version.0"
 $manifest.Save((Join-Path $packageSource 'AppxManifest.xml'))
-Add-Type -AssemblyName System.Drawing
-$icon = [Drawing.Icon]::ExtractAssociatedIcon($app)
-try {
-    $bitmap = $icon.ToBitmap()
-    try {
-        foreach ($size in @(44, 150, 256)) {
-            $image = [Drawing.Bitmap]::new($bitmap, [Drawing.Size]::new($size, $size))
-            try {
-                $name = if ($size -eq 256) { 'Logo.png' } else { "Logo$size.png" }
-                $image.Save((Join-Path $packageSource "Assets/$name"), [Drawing.Imaging.ImageFormat]::Png)
-            }
-            finally { $image.Dispose() }
-        }
-    }
-    finally { $bitmap.Dispose() }
-}
-finally { $icon.Dispose() }
+& (Join-Path $PSScriptRoot 'windows-icon-assets.ps1') -Executable $app -OutputDirectory (Join-Path $packageSource 'Assets')
+# The shell selects targetsize/altform variants through the package resource index.
+$priConfig = Join-Path $work 'priconfig.xml'
+Invoke-Native (Join-Path $sdkBin 'makepri.exe') @('createconfig', '/cf', $priConfig, '/dq', 'en-US', '/pv', '10.0.0', '/o')
+Invoke-Native (Join-Path $sdkBin 'makepri.exe') @('new', '/pr', $packageSource, '/cf', $priConfig, '/of', (Join-Path $packageSource 'resources.pri'), '/in', $manifest.Package.Identity.Name, '/o')
 # Sparse-package visual assets resolve relative to the external install location.
 # Keeping them only inside the MSIX leaves the running app with a blank taskbar icon.
 Copy-Item -LiteralPath (Join-Path $packageSource 'Assets') -Destination $payload -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $packageSource 'resources.pri') -Destination $payload -Force
 $package = Join-Path $payload 'Edolterm.Explorer.msix'
 Invoke-Native (Join-Path $sdkBin 'makeappx.exe') @('pack', '/o', '/nv', '/d', $packageSource, '/p', $package)
 Invoke-Native (Join-Path $sdkBin 'signtool.exe') @('sign', '/fd', 'SHA256', '/s', 'My', '/sha1', $certificate.Thumbprint, $package)

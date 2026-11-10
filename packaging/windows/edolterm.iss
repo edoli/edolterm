@@ -45,6 +45,7 @@ Name: "desktopicon"; Description: "바탕 화면 바로 가기 만들기"; Flags
 [Files]
 Source: "{#PayloadDir}\edolterm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\Assets\*.png"; DestDir: "{app}\Assets"; Flags: ignoreversion
+Source: "{#PayloadDir}\resources.pri"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\LICENSE-ConPTY.txt"; DestDir: "{app}"; Flags: ignoreversion
