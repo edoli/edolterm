@@ -5,8 +5,20 @@ use anyhow::{Result, ensure};
 use std::path::Path;
 
 async fn launch(cx: &mut AsyncApp, directory: Option<&Path>, new_window: bool) -> Result<()> {
+    launch_profile(cx, directory, new_window, None).await
+}
+
+async fn launch_profile(
+    cx: &mut AsyncApp,
+    directory: Option<&Path>,
+    new_window: bool,
+    profile: Option<&str>,
+) -> Result<()> {
     let mut command = platform::quiet_command(std::env::current_exe()?);
     command.arg("--smoke-test=instances");
+    if let Some(profile) = profile {
+        command.arg("--profile").arg(profile);
+    }
     if let Some(directory) = directory {
         command.arg("-d").arg(directory);
     }
@@ -272,6 +284,74 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
         }
         Ok::<_, anyhow::Error>(())
     })?;
+    profile_launches(cx, dir).await?;
+    Ok(())
+}
+
+async fn profile_launches(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
+    let target = entries(cx)[0].clone();
+    let profile_dir = dir.join("프로필 시작 폴더");
+    std::fs::create_dir_all(&profile_dir)?;
+    let id = "custom:한글 with spaces \\\"quote\\\" trailing\\";
+    let profile = target.handle.update(cx, |app, _, cx| {
+        let mut profile = app.default_profile();
+        profile.id = id.into();
+        profile.name = "점프 목록 테스트".into();
+        profile.cwd = Some(profile_dir.clone());
+        app.draft.profiles.push(profile.clone());
+        app.draft.windowing_behavior = WindowingBehavior::CurrentDesktop;
+        app.save_settings(cx);
+        profile
+    })?;
+    cx.background_executor()
+        .timer(Duration::from_millis(50))
+        .await;
+    activate(&target, cx)?;
+    let count = entries(cx).len();
+    let before = tabs(&target, cx);
+    launch_profile(cx, None, false, Some(id)).await?;
+    ensure!(
+        entries(cx).len() == count && tabs(&target, cx) == before + 1,
+        "profile launch did not attach"
+    );
+    let verify = |entry: &windows::Entry, expected_dir: &Path, cx: &AsyncApp| -> Result<()> {
+        entry.root.upgrade().unwrap().read_with(cx, |app, cx| {
+            let terminal = app.active_terminal().unwrap();
+            let terminal = terminal.read(cx);
+            ensure!(
+                terminal.profile == profile,
+                "selected profile changed during launch"
+            );
+            ensure!(
+                terminal.working_directory() == expected_dir,
+                "profile launch used wrong cwd"
+            );
+            Ok(())
+        })
+    };
+    verify(&target, &profile_dir, cx)?;
+    launch_profile(cx, Some(dir), true, Some(id)).await?;
+    ensure!(
+        entries(cx).len() == count + 1,
+        "profile --new-window did not create a window"
+    );
+    let new = entries(cx).last().unwrap().clone();
+    ensure!(
+        tabs(&new, cx) == 1,
+        "profile launch restored unrelated tabs"
+    );
+    verify(&new, dir, cx)?;
+    let before = tabs(&new, cx);
+    let mut stale = crate::instance::Request::new(None, false)?;
+    stale.profile = Some("__removed_profile__".into());
+    ensure!(
+        cx.update(|cx| windows::route(&stale, cx)).is_err(),
+        "stale profile silently used default"
+    );
+    ensure!(
+        tabs(&new, cx) == before && entries(cx).len() == count + 1,
+        "stale profile changed windows"
+    );
     Ok(())
 }
 

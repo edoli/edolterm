@@ -61,8 +61,8 @@ Source: "{#PayloadDir}\explorer-context-menu.ps1"; DestDir: "{app}"; Flags: igno
 Root: HKA; Subkey: "Software\Edoli\{#AppDisplayName}"; ValueType: string; ValueName: "InstallLocation"; ValueData: "{app}"; Flags: uninsdeletekey
 
 [Icons]
-Name: "{group}\Edolterm"; Filename: "{app}\edolterm.exe"
-Name: "{autodesktop}\Edolterm"; Filename: "{app}\edolterm.exe"; Tasks: desktopicon
+Name: "{group}\Edolterm"; Filename: "{app}\edolterm.exe"; AppUserModelID: "dev.edoli.edolterm"
+Name: "{autodesktop}\Edolterm"; Filename: "{app}\edolterm.exe"; AppUserModelID: "dev.edoli.edolterm"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\edolterm.exe"; Description: "Edolterm 실행"; Flags: nowait postinstall skipifsilent unchecked runasoriginaluser

@@ -13,6 +13,8 @@ pub struct Request {
     pub version: u32,
     pub id: String,
     pub directory: Option<PathBuf>,
+    #[serde(default)]
+    pub profile: Option<String>,
     pub new_window: bool,
 }
 
@@ -24,6 +26,7 @@ impl Request {
             version: 1,
             id: nonce.iter().map(|byte| format!("{byte:02x}")).collect(),
             directory,
+            profile: None,
             new_window,
         })
     }
@@ -39,6 +42,11 @@ impl Request {
             && (!path.is_absolute() || !path.is_dir())
         {
             return Err(format!("시작 폴더를 찾을 수 없습니다: {}", path.display()));
+        }
+        if let Some(profile) = &self.profile
+            && (profile.trim().is_empty() || profile.contains('\0'))
+        {
+            return Err("프로필 ID가 비어 있거나 올바르지 않습니다.".into());
         }
         Ok(())
     }
@@ -70,6 +78,24 @@ pub fn select_window(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn launch_request_reads_legacy_packets_and_preserves_profile() {
+        let request = Request::new(None, false).unwrap();
+        let mut legacy = serde_json::to_value(&request).unwrap();
+        legacy.as_object_mut().unwrap().remove("profile");
+        let legacy: Request = serde_json::from_value(legacy).unwrap();
+        assert!(legacy.profile.is_none());
+        let mut request = request;
+        request.profile = Some("wsl:개발 Ubuntu".into());
+        let restored: Request =
+            serde_json::from_slice(&serde_json::to_vec(&request).unwrap()).unwrap();
+        assert_eq!(restored.profile, request.profile);
+        restored.validate().unwrap();
+        for invalid in ["", " ", "embedded\0nul"] {
+            request.profile = Some(invalid.into());
+            assert!(request.validate().is_err());
+        }
+    }
     #[test]
     fn policies_select_mru_without_crossing_desktops_or_closing_windows() {
         let windows = [

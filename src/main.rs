@@ -8,6 +8,7 @@ mod keys;
 mod platform;
 mod select;
 mod session;
+mod taskbar;
 mod terminal_view;
 mod text_field;
 mod theme;

@@ -26,6 +26,9 @@ pub(super) struct Windows {
 }
 impl Global for Windows {}
 impl Windows {
+    pub fn detected_profiles(&self) -> &[Profile] {
+        &self.detected
+    }
     pub fn new(dir: PathBuf, detected: Vec<Profile>, geometry: SavedSession) -> Self {
         Self {
             entries: Vec::new(),
@@ -104,7 +107,7 @@ pub(super) fn open(
             ..Default::default()
         }),
         window_min_size: Some(size(px(560.), px(320.))),
-        app_id: Some("dev.edoli.edolterm".into()),
+        app_id: Some(crate::taskbar::APP_ID.into()),
         ..Default::default()
     };
     let mut created = None;
@@ -168,6 +171,19 @@ fn route_inner(request: &Request, cx: &mut App) -> Result<(), String> {
     if cx.global::<Windows>().preserve_session {
         return Err("Edolterm을 다시 시작하고 있습니다. 잠시 후 다시 시도하세요.".into());
     }
+    let profile = request
+        .profile
+        .as_ref()
+        .map(|id| {
+            platform::merge_profiles(
+                cx.global::<Windows>().detected.clone(),
+                &cx.global::<SharedSettings>().0.profiles,
+            )
+            .into_iter()
+            .find(|profile| &profile.id == id)
+            .ok_or_else(|| format!("프로필을 찾을 수 없습니다: {id}"))
+        })
+        .transpose()?;
     let entries = cx.global::<Windows>().entries.clone();
     let behavior = cx.global::<SharedSettings>().0.windowing_behavior;
     let target = select_window(
@@ -191,7 +207,12 @@ fn route_inner(request: &Request, cx: &mut App) -> Result<(), String> {
         entry
             .handle
             .update(cx, |root, window, cx| {
-                root.add_terminal(root.default_profile(), directory, window, cx);
+                root.add_terminal(
+                    profile.unwrap_or_else(|| root.default_profile()),
+                    directory,
+                    window,
+                    cx,
+                );
                 restore(entry.hwnd);
                 window.activate_window();
             })
@@ -200,10 +221,10 @@ fn route_inner(request: &Request, cx: &mut App) -> Result<(), String> {
         let mut geometry = cx.global::<Windows>().geometry.clone();
         geometry.x = None;
         geometry.y = None;
-        let startup = request
-            .directory
-            .clone()
-            .map_or(Startup::Default, Startup::Directory);
+        let startup = Startup::Launch {
+            profile,
+            directory: request.directory.clone(),
+        };
         open(startup, geometry, None, cx).map_err(|error| error.to_string())?;
     }
     Ok(())

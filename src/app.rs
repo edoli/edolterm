@@ -17,6 +17,7 @@ mod shortcuts;
 #[cfg(debug_assertions)]
 mod smoke;
 mod tabs;
+mod taskbar;
 mod windows;
 use config::shortcuts::{self as keybindings, Bindings};
 use shortcuts::SettingsPage;
@@ -30,7 +31,10 @@ struct Tab {
 
 enum Startup {
     Restore(SavedSession),
-    Directory(PathBuf),
+    Launch {
+        profile: Option<Profile>,
+        directory: Option<PathBuf>,
+    },
     Default,
 }
 
@@ -190,8 +194,13 @@ impl TerminalApp {
             last_bounds: window.window_bounds(),
             retiring_sessions: Vec::new(),
         };
-        if let Startup::Directory(directory) = startup {
-            this.add_terminal(this.default_profile(), Some(directory), window, cx);
+        if let Startup::Launch { profile, directory } = startup {
+            this.add_terminal(
+                profile.unwrap_or_else(|| this.default_profile()),
+                directory,
+                window,
+                cx,
+            );
         } else if let Startup::Restore(saved) = startup
             && this.settings.restore_session
         {
@@ -1462,7 +1471,10 @@ pub fn run(launch_options: crate::cli::Options) {
                 launch_options.working_directory.clone(),
                 launch_options.new_window,
             )
-            .and_then(|request| crate::instance::start(&dir, request));
+            .and_then(|mut request| {
+                request.profile = launch_options.profile.clone();
+                crate::instance::start(&dir, request)
+            });
             match result {
                 Ok(crate::instance::Outcome::Forwarded) => return,
                 Ok(crate::instance::Outcome::Host(host)) => Some(host),
@@ -1511,11 +1523,27 @@ pub fn run(launch_options: crate::cli::Options) {
         saved
     };
     let detected = platform::discover_profiles();
+    let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
+    let launch_profile = match launch_options.profile.as_ref() {
+        Some(id) => match profiles.iter().find(|profile| &profile.id == id) {
+            Some(profile) => Some(profile.clone()),
+            None => {
+                platform::show_startup_error(&format!("프로필을 찾을 수 없습니다: {id}"));
+                std::process::exit(2);
+            }
+        },
+        None => None,
+    };
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
+            cx.set_app_identity(crate::taskbar::APP_ID, "Edolterm");
             cx.set_global(windows::SharedSettings(settings.clone()));
             cx.set_global(windows::Windows::new(dir, detected, saved.clone()));
+            #[cfg(debug_assertions)]
+            let update_taskbar = smoke_mode.is_none();
+            #[cfg(not(debug_assertions))]
+            let update_taskbar = true;
             #[cfg(windows)]
             {
                 let requests = host.as_ref().map(|host| host.requests.clone());
@@ -1540,6 +1568,7 @@ pub fn run(launch_options: crate::cli::Options) {
             })
             .detach();
             let initial_windows = if launch_options.working_directory.is_none()
+                && launch_profile.is_none()
                 && settings.restore_session
                 && !saved.windows.is_empty()
             {
@@ -1550,10 +1579,15 @@ pub fn run(launch_options: crate::cli::Options) {
             let mut first = None;
             let mut handles = Vec::new();
             for geometry in initial_windows {
-                let startup = match launch_options.working_directory.clone() {
-                    Some(directory) => Startup::Directory(directory),
-                    None => Startup::Restore(geometry.clone()),
-                };
+                let startup =
+                    if launch_profile.is_some() || launch_options.working_directory.is_some() {
+                        Startup::Launch {
+                            profile: launch_profile.clone(),
+                            directory: launch_options.working_directory.clone(),
+                        }
+                    } else {
+                        Startup::Restore(geometry.clone())
+                    };
                 match windows::open(startup, geometry, error.clone(), cx) {
                     Ok(root) => {
                         if first.is_none() {
@@ -1578,6 +1612,10 @@ pub fn run(launch_options: crate::cli::Options) {
             }
             let active = saved.active_window.min(handles.len() - 1);
             let _ = handles[active].update(cx, |_, window, _| window.activate_window());
+            if update_taskbar {
+                let root = cx.global::<windows::Windows>().entries[active].root.clone();
+                let _ = handles[active].update(cx, |_, window, _| taskbar::start(root, window));
+            }
             #[cfg(debug_assertions)]
             if let Some(mode) = smoke_mode {
                 let root = first.unwrap();

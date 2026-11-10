@@ -19,6 +19,8 @@ mod settings_controls;
 mod shortcuts;
 #[cfg(feature = "ui-tests")]
 mod tabs;
+#[cfg(feature = "ui-tests")]
+mod taskbar;
 
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
@@ -48,6 +50,8 @@ pub fn start(
     }
     let handle = window.window_handle();
     #[cfg(feature = "ui-tests")]
+    let taskbar_probe = (mode == "single").then(|| taskbar::probe(&root, window, cx));
+    #[cfg(feature = "ui-tests")]
     if mode == "settings" {
         assert!(
             root.read(cx).preferences.is_none(),
@@ -61,6 +65,12 @@ pub fn start(
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_millis(800)).await;
         let mut failure = None;
+        #[cfg(feature = "ui-tests")]
+        if let Some(probe) = taskbar_probe
+            && let Err(error) = taskbar::verify(probe, cx).await
+        {
+            failure = Some(format!("{error:#}"));
+        }
         if let Some(directory) = requested_directory {
             let marker = format!("EXPLORER_START_{}", directory.display());
             root.read_with(cx, |app, cx| {

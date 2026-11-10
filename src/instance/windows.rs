@@ -497,6 +497,7 @@ mod tests {
             let dir = dir.clone();
             clients.push(thread::spawn(move || {
                 let mut request = Request::new(Some(dir.clone()), i == 4).unwrap();
+                request.profile = Some("wsl:개발 Ubuntu".into());
                 if i == 5 {
                     request.version = 999;
                 }
@@ -521,6 +522,7 @@ mod tests {
                 thread::sleep(Duration::from_millis(5));
             };
             envelope.request.validate().unwrap();
+            assert_eq!(envelope.request.profile.as_deref(), Some("wsl:개발 Ubuntu"));
             // One GUI rejection must reach the launch client intact.
             let response = if envelope.request.new_window {
                 Err("test GUI rejection".into())

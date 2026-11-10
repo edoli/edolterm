@@ -4,6 +4,7 @@ use std::{ffi::OsString, path::PathBuf};
 #[derive(Default)]
 pub struct Options {
     pub working_directory: Option<PathBuf>,
+    pub profile: Option<String>,
     pub new_window: bool,
     #[cfg(debug_assertions)]
     pub smoke_mode: Option<String>,
@@ -16,6 +17,28 @@ impl Options {
         while let Some(arg) = args.next() {
             if arg == "--new-window" {
                 options.new_window = true;
+                continue;
+            }
+            let profile = if arg == "--profile" || arg == "-p" {
+                Some(
+                    args.next()
+                        .context("--profile 뒤에 프로필 ID를 지정하세요.")?,
+                )
+            } else {
+                arg.to_str()
+                    .and_then(|s| s.strip_prefix("--profile="))
+                    .map(OsString::from)
+            };
+            if let Some(profile) = profile {
+                let profile = profile
+                    .into_string()
+                    .map_err(|_| anyhow::anyhow!("프로필 ID는 유효한 Unicode여야 합니다."))?;
+                if profile.trim().is_empty() || profile.contains('\0') {
+                    bail!("프로필 ID가 비어 있거나 올바르지 않습니다.");
+                }
+                if options.profile.replace(profile).is_some() {
+                    bail!("프로필은 한 번만 지정할 수 있습니다.");
+                }
                 continue;
             }
             let directory = if arg == "--working-directory" || arg == "-d" {
@@ -64,6 +87,27 @@ mod tests {
         assert!(options.new_window);
         assert!(options.working_directory.is_some());
         assert!(!parse(&[]).unwrap().new_window);
+    }
+
+    #[test]
+    fn profile_ids_preserve_unicode_and_combine_with_launch_options() {
+        let id = "wsl:개발 Ubuntu \\\"quoted\\\"";
+        let options = parse(&["--profile", id, "-d", ".", "--new-window"]).unwrap();
+        assert_eq!(options.profile.as_deref(), Some(id));
+        assert!(options.new_window);
+        assert!(options.working_directory.is_some());
+        assert_eq!(
+            parse(&["--profile=cmd"]).unwrap().profile.as_deref(),
+            Some("cmd")
+        );
+        assert_eq!(
+            parse(&["-p", "powershell"]).unwrap().profile.as_deref(),
+            Some("powershell")
+        );
+        assert!(parse(&["--profile"]).is_err());
+        assert!(parse(&["--profile="]).is_err());
+        assert!(parse(&["-p", " "]).is_err());
+        assert!(parse(&["-p", "a", "--profile=b"]).is_err());
     }
 
     #[test]
