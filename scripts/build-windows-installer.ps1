@@ -17,10 +17,11 @@ if ($LASTEXITCODE -ne 0) { throw 'Invalid Cargo version or release tag.' }
 $env:EDOLTERM_RELEASE_REPOSITORY = $Repository
 $output = [IO.Path]::GetFullPath((Join-Path $projectDir $OutputDir))
 $payload = Join-Path $output 'payload'
+$shellPayload = Join-Path $payload 'shell-integration'
 $work = Join-Path $projectDir 'target/windows-package'
 $packageSource = Join-Path $work 'msix'
 $source = Join-Path $projectDir 'packaging/windows'
-foreach ($dir in @($payload, $work, $packageSource, (Join-Path $packageSource 'Assets'))) {
+foreach ($dir in @($payload, $shellPayload, $work, $packageSource, (Join-Path $packageSource 'Assets'))) {
     [IO.Directory]::CreateDirectory($dir) | Out-Null
 }
 function Invoke-Native([string]$Program, [string[]]$Arguments) {
@@ -35,8 +36,9 @@ if (-not $SkipAppBuild) {
 & (Join-Path $PSScriptRoot 'bundle-windows.ps1') -OutputDir $OutputDir\payload -Profile $Profile
 Invoke-Native 'cmake' @('-S', $source, '-B', (Join-Path $work 'native'), '-A', 'x64', '-DBUILD_TESTING=OFF')
 Invoke-Native 'cmake' @('--build', (Join-Path $work 'native'), '--config', 'Release')
-Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.ExplorerCommand.dll') -Destination $payload -Force
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-shell-integration.ps1') -Destination $payload -Force
+Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.ExplorerCommand.dll') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.ExplorerHost.exe') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-shell-integration.ps1') -Destination $shellPayload -Force
 
 $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
 $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory |
@@ -73,12 +75,20 @@ if ($CertificateThumbprint) {
 if (-not $certificate.HasPrivateKey -or $certificate.Subject -cne 'CN=Edolterm Development' -or $certificate.NotAfter -le (Get-Date)) {
     throw 'An unexpired Edolterm Development code-signing certificate with its private key is required.'
 }
-Export-Certificate -Cert $certificate -FilePath (Join-Path $payload 'Edolterm.Development.cer') -Force | Out-Null
+Export-Certificate -Cert $certificate -FilePath (Join-Path $shellPayload 'Edolterm.Development.cer') -Force | Out-Null
 
-# Merge package identity with the executable's existing GPUI application manifest.
+# Only the shell integration endpoint has package identity. Keep the terminal's
+# native GPUI manifest intact so COM activation cannot terminate its process.
 $app = Join-Path $payload 'edolterm.exe'
-Invoke-Native (Join-Path $sdkBin 'mt.exe') @('-nologo', "-inputresource:$app;#1", '-manifest', (Join-Path $source 'Identity.manifest'), "-outputresource:$app;#1")
-foreach ($file in @($app, (Join-Path $payload 'Edolterm.ExplorerCommand.dll'))) {
+$appManifest = Join-Path $work 'edolterm.manifest'
+Invoke-Native (Join-Path $sdkBin 'mt.exe') @('-nologo', "-inputresource:$app;#1", "-out:$appManifest")
+[xml]$nativeManifest = Get-Content -LiteralPath $appManifest -Raw
+if ($nativeManifest.GetElementsByTagName('msix', 'urn:schemas-microsoft-com:msix.v1').Count) {
+    throw 'edolterm.exe must not contain Explorer package identity. Rebuild the application.'
+}
+$shellHost = Join-Path $shellPayload 'Edolterm.ExplorerHost.exe'
+Invoke-Native (Join-Path $sdkBin 'mt.exe') @('-nologo', "-inputresource:$shellHost;#1", '-manifest', (Join-Path $source 'Identity.manifest'), "-outputresource:$shellHost;#1")
+foreach ($file in @($app, $shellHost, (Join-Path $shellPayload 'Edolterm.ExplorerCommand.dll'))) {
     Invoke-Native (Join-Path $sdkBin 'signtool.exe') @('sign', '/fd', 'SHA256', '/s', 'My', '/sha1', $certificate.Thumbprint, $file)
 }
 
@@ -92,9 +102,9 @@ Invoke-Native (Join-Path $sdkBin 'makepri.exe') @('createconfig', '/cf', $priCon
 Invoke-Native (Join-Path $sdkBin 'makepri.exe') @('new', '/pr', $packageSource, '/cf', $priConfig, '/of', (Join-Path $packageSource 'resources.pri'), '/in', $manifest.Package.Identity.Name, '/o')
 # Sparse-package visual assets resolve relative to the external install location.
 # Keeping them only inside the MSIX leaves the running app with a blank taskbar icon.
-Copy-Item -LiteralPath (Join-Path $packageSource 'Assets') -Destination $payload -Recurse -Force
-Copy-Item -LiteralPath (Join-Path $packageSource 'resources.pri') -Destination $payload -Force
-$package = Join-Path $payload 'Edolterm.Explorer.msix'
+Copy-Item -LiteralPath (Join-Path $packageSource 'Assets') -Destination $shellPayload -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $packageSource 'resources.pri') -Destination $shellPayload -Force
+$package = Join-Path $shellPayload 'Edolterm.Explorer.msix'
 Invoke-Native (Join-Path $sdkBin 'makeappx.exe') @('pack', '/o', '/nv', '/d', $packageSource, '/p', $package)
 Invoke-Native (Join-Path $sdkBin 'signtool.exe') @('sign', '/fd', 'SHA256', '/s', 'My', '/sha1', $certificate.Thumbprint, $package)
 # bundle-windows records the unsigned executable hash; refresh it for the signed payload.
@@ -104,9 +114,9 @@ $runtime.files = @(foreach ($name in @('edolterm.exe', 'conpty.dll', 'OpenConsol
     [pscustomobject]@{ name = $name; Hash = (Get-FileHash -LiteralPath (Join-Path $payload $name) -Algorithm SHA256).Hash }
 })
 $runtime | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $runtimeFile -Encoding UTF8
-# Recompute hashes after embedding identity and signing the staged executable.
-Get-ChildItem -LiteralPath $payload -File | Where-Object Name -ne 'SHA256SUMS.txt' |
-    Get-FileHash -Algorithm SHA256 | ForEach-Object { '{0}  {1}' -f $_.Hash, [IO.Path]::GetFileName($_.Path) } |
+# Recompute hashes after signing the staged executable.
+Get-ChildItem -LiteralPath $payload -File -Recurse | Where-Object Name -ne 'SHA256SUMS.txt' |
+    Get-FileHash -Algorithm SHA256 | ForEach-Object { '{0}  {1}' -f $_.Hash, $_.Path.Substring($payload.Length + 1).Replace('\', '/') } |
     Set-Content -LiteralPath (Join-Path $payload 'SHA256SUMS.txt') -Encoding UTF8
 if ($SkipInstaller) { Write-Output "Signed payload: $payload"; return }
 if (-not $InnoCompiler) { $InnoCompiler = & (Join-Path $PSScriptRoot 'install-inno.ps1') }

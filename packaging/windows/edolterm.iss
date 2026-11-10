@@ -44,15 +44,16 @@ Name: "desktopicon"; Description: "바탕 화면 바로 가기 만들기"; Flags
 
 [Files]
 Source: "{#PayloadDir}\edolterm.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\Assets\*.png"; DestDir: "{app}\Assets"; Flags: ignoreversion
-Source: "{#PayloadDir}\resources.pri"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Assets\*.png"; DestDir: "{app}\shell-integration\Assets"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\resources.pri"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
 Source: "{#PayloadDir}\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\LICENSE-ConPTY.txt"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\Edolterm.ExplorerCommand.dll"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\Edolterm.Explorer.msix"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\Edolterm.Development.cer"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PayloadDir}\windows-shell-integration.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.ExplorerCommand.dll"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.ExplorerHost.exe"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.Explorer.msix"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.Development.cer"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\windows-shell-integration.ps1"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
 
 Source: "{#PayloadDir}\explorer-context-menu.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
@@ -83,12 +84,16 @@ function CloseHandle(hObject: THandle): Boolean;
 function RunShellIntegration(Action: String): Boolean;
 var
   ExitCode: Integer;
-  Parameters, Scope: String;
+  Parameters, Scope, IntegrationDirectory: String;
 begin
   if IsAdminInstallMode then Scope := 'Machine' else Scope := 'User';
+  IntegrationDirectory := ExpandConstant('{app}\shell-integration');
+  { Read the old helper when upgrading a release with a flat installation layout. }
+  if not FileExists(IntegrationDirectory + '\windows-shell-integration.ps1') then
+    IntegrationDirectory := ExpandConstant('{app}');
   Parameters := '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
-    AddQuotes(ExpandConstant('{app}\windows-shell-integration.ps1')) +
-    ' -Action ' + Action + ' -AppDirectory ' + AddQuotes(ExpandConstant('{app}')) + ' -Scope ' + Scope;
+    AddQuotes(IntegrationDirectory + '\windows-shell-integration.ps1') +
+    ' -Action ' + Action + ' -AppDirectory ' + AddQuotes(IntegrationDirectory) + ' -Scope ' + Scope;
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Parameters, '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
   Log('Explorer integration ' + Action + ': launched=' + IntToStr(Ord(Result)) + ', exit=' + IntToStr(ExitCode));

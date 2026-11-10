@@ -6,6 +6,11 @@ set_target_properties(EdoltermExplorer PROPERTIES OUTPUT_NAME "Edolterm.Explorer
 target_compile_features(EdoltermExplorer PRIVATE cxx_std_17)
 target_compile_options(EdoltermExplorer PRIVATE /W4 /WX /utf-8 /EHsc)
 target_link_libraries(EdoltermExplorer PRIVATE shell32 shlwapi ole32 uuid)
+add_executable(EdoltermExplorerHost WIN32 ExplorerHost.cpp)
+set_target_properties(EdoltermExplorerHost PROPERTIES OUTPUT_NAME "Edolterm.ExplorerHost"
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_features(EdoltermExplorerHost PRIVATE cxx_std_17)
+target_compile_options(EdoltermExplorerHost PRIVATE /W4 /WX /utf-8 /EHsc)
 option(BUILD_TESTING "Build optional Explorer integration tests" OFF)
 include(CTest)
 if(BUILD_TESTING)
@@ -18,5 +23,10 @@ if(BUILD_TESTING)
         set_target_properties(${target} PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endforeach()
     target_link_libraries(ExplorerCommandTests PRIVATE shell32 ole32 uuid)
+    add_dependencies(ExplorerCommandTests EdoltermExplorer TestLauncher)
+    add_custom_command(TARGET ExplorerCommandTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:ExplorerCommandTests>/shell-integration"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:EdoltermExplorer>"
+            "$<TARGET_FILE_DIR:ExplorerCommandTests>/shell-integration/Edolterm.ExplorerCommand.dll")
     add_test(NAME ExplorerCommand COMMAND ExplorerCommandTests "${CMAKE_CURRENT_BINARY_DIR}/fixtures")
 endif()

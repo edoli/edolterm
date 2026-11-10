@@ -14,10 +14,11 @@ if ($PSEdition -eq 'Core') {
 }
 $env:PSModulePath = Join-Path $PSHOME 'Modules'
 $AppDirectory = (Get-Item -LiteralPath $AppDirectory).FullName
+$terminalDirectory = if ((Split-Path -Leaf $AppDirectory) -eq 'shell-integration') { Split-Path -Parent $AppDirectory } else { $AppDirectory }
 $logDirectory = Join-Path $env:LOCALAPPDATA 'Edolterm/Logs'
 [IO.Directory]::CreateDirectory($logDirectory) | Out-Null
 Start-Transcript -Path (Join-Path $logDirectory "explorer-$Action.log") -Append | Out-Null
-$packageName = 'Edoli.Edolterm.Explorer'
+$packageName = 'Edoli.Edolterm.ShellIntegration'
 $certificateFile = Join-Path $AppDirectory 'Edolterm.Development.cer'
 $packageFile = Join-Path $AppDirectory 'Edolterm.Explorer.msix'
 function Is-Administrator {
@@ -41,14 +42,17 @@ if ($Action -eq 'TrustCertificate' -or $Action -eq 'RemoveCertificate') {
         Import-Certificate -FilePath $certificateFile -CertStoreLocation 'Cert:/LocalMachine/TrustedPeople' | Out-Null
         Write-Output 'Trusted the Edolterm development signing certificate.'
     } else {
-        if (Get-AppxPackage -AllUsers -Name $packageName) { throw 'Uninstall Edolterm Explorer integration for all users before removing its certificate.' }
+        if ((Get-AppxPackage -AllUsers -Name $packageName) -or
+            (Get-AppxPackage -AllUsers -Name 'Edoli.Edolterm.Explorer')) {
+            throw 'Uninstall Edolterm Explorer integration for all users before removing its certificate.'
+        }
         $path = "Cert:/LocalMachine/TrustedPeople/$($certificate.Thumbprint)"
         if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path }
         Write-Output 'Removed the Edolterm development certificate trust.'
     }
     exit 0
 }
-$legacyScript = Join-Path $AppDirectory 'explorer-context-menu.ps1'
+$legacyScript = Join-Path $terminalDirectory 'explorer-context-menu.ps1'
 if ($Action -eq 'Uninstall') {
     if ([Environment]::OSVersion.Version.Build -ge 22000) {
         if ($Scope -eq 'Machine') {
@@ -65,7 +69,7 @@ if ($Action -eq 'Uninstall') {
 }
 if ([Environment]::OSVersion.Version.Build -lt 22000) {
     # ConPTY supports Windows 10 1809; sparse identity is neither needed nor installed here.
-    & $legacyScript -Action Install -Scope $Scope -ExecutablePath (Join-Path $AppDirectory 'edolterm.exe')
+    & $legacyScript -Action Install -Scope $Scope -ExecutablePath (Join-Path $terminalDirectory 'edolterm.exe')
     exit 0
 }
 $certificate = Read-PublicCertificate

@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <new>
 #include <string>
+#include "LaunchTerminal.h"
 
 using Microsoft::WRL::ComPtr;
 static HMODULE module;
@@ -34,7 +35,7 @@ static std::filesystem::path executable() {
     DWORD count = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
     if (!count || count >= path.size()) throw std::runtime_error("module path");
     path.resize(count);
-    return std::filesystem::path(path).parent_path() / L"edolterm.exe";
+    return std::filesystem::path(path).parent_path().parent_path() / L"edolterm.exe";
 }
 
 class Command final : public IExplorerCommand, public IObjectWithSite {
@@ -124,12 +125,8 @@ public:
             CoTaskMemFree(raw);
             const auto app = executable().wstring();
             auto arguments = quote(app) + L" --working-directory " + quote(directory);
-            STARTUPINFOW startup{sizeof(startup)};
-            startup.dwFlags = STARTF_USESHOWWINDOW;
-            startup.wShowWindow = SW_SHOWNORMAL;
             PROCESS_INFORMATION process{};
-            if (!CreateProcessW(app.c_str(), arguments.data(), nullptr, nullptr, FALSE,
-                                CREATE_UNICODE_ENVIRONMENT, nullptr, directory.c_str(), &startup, &process))
+            if (!launch_terminal(app, arguments, directory.c_str(), process))
                 return HRESULT_FROM_WIN32(GetLastError());
             CloseHandle(process.hThread);
             CloseHandle(process.hProcess);
