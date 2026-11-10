@@ -727,6 +727,10 @@ impl TerminalApp {
             - if controls { 138. } else { 0. })
         .max(1.);
         let tab_width = (viewport / self.tabs.len().max(1) as f32).clamp(100., 240.);
+        // GPUI snaps each explicit width separately. Round down before summing so
+        // fitted tabs cannot grow past their container by a few device pixels.
+        let scale = window.scale_factor();
+        let tab_width = (tab_width * scale).floor() / scale;
         (
             viewport,
             tab_width,
