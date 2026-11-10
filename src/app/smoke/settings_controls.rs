@@ -97,11 +97,12 @@ pub(super) async fn run(
         Ok(())
     })??;
     handle.update(cx, |_, window, cx| -> Result<()> {
-        let (font, size, history) = {
+        let (font, size, line_height, history) = {
             let prefs = root.read(cx).preferences.as_ref().unwrap();
             (
                 prefs.font.clone(),
                 prefs.size.clone(),
+                prefs.line_height.clone(),
                 prefs.history.clone(),
             )
         };
@@ -112,11 +113,30 @@ pub(super) async fn run(
             "font size keyboard step"
         );
         set_number(&history, "12345", window, cx);
+        ensure!(
+            line_height.read(cx).input.read(cx).text == "1.2",
+            "default line height formatting"
+        );
+        set_number(&line_height, "1.2", window, cx);
+        press("up", window, cx)?;
+        press("up", window, cx)?;
+        ensure!(
+            line_height.read(cx).input.read(cx).text == "1.4",
+            "decimal step exposed rounding noise"
+        );
         root.update(cx, |app, cx| app.save_settings(cx));
         let saved = Settings::load(&root.read(cx).dir)?;
         ensure!(
-            saved.font_size == 18.5 && saved.scrollback == 12345,
+            saved.font_size == 18.5 && saved.scrollback == 12345 && saved.line_height == 1.4,
             "numeric settings did not persist"
+        );
+        ensure!(
+            root.read(cx)
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.terminal.as_ref())
+                .all(|terminal| terminal.read(cx).settings.line_height == 1.4),
+            "line height did not apply to existing terminals"
         );
         ensure!(
             saved.theme == root.read(cx).draft.theme,
@@ -129,6 +149,10 @@ pub(super) async fn run(
         for (input, invalid) in [
             (&size, "NaN"),
             (&size, "49"),
+            (&line_height, "NaN"),
+            (&line_height, "inf"),
+            (&line_height, "0.49"),
+            (&line_height, "3.1"),
             (&history, "1000001"),
             (&history, "1.5"),
             (&history, "-1"),

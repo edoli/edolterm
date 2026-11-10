@@ -829,7 +829,8 @@ impl TerminalView {
         self.cell_width = f32::from(measurement.width).max(1.);
         let vertical = layout::ViewportRows::fit(
             f32::from(bounds.size.height),
-            f32::from(measurement.ascent + measurement.descent),
+            self.settings.font_size,
+            self.settings.line_height,
             window.scale_factor(),
         );
         self.cell_height = vertical.height;

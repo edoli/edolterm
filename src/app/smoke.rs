@@ -269,6 +269,14 @@ pub fn start(
             let result = handle.update(cx, |_, window, cx| -> anyhow::Result<()> {
                 let terminal = root.read(cx).active_terminal().unwrap();
                 terminal.update(cx, |view, cx| { view.settings.font_size = 15.; cx.notify(); });
+                let mut line_heights = Vec::new();
+                for multiplier in [1.0, 1.6, 1.2] {
+                    terminal.update(cx, |view, cx| { view.settings.line_height = multiplier; cx.notify(); });
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                    line_heights.push(terminal.update(cx, |view, cx| view.layout_probe(window, cx))?);
+                }
+                config::atomic_write(&root.read(cx).dir.join("line-heights.json"), serde_json::to_string_pretty(&line_heights)?.as_bytes())?;
                 window.refresh();
                 window.draw(cx).clear(cx);
                 let metrics = terminal.update(cx, |view, cx| view.layout_probe(window, cx))?;

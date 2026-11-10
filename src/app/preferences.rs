@@ -7,6 +7,7 @@ pub(super) struct Preferences {
     pub(super) theme: Entity<Select>,
     pub(super) font: Entity<Select>,
     pub(super) size: Entity<NumberInput>,
+    pub(super) line_height: Entity<NumberInput>,
     pub(super) history: Entity<NumberInput>,
     _subscriptions: Vec<Subscription>,
 }
@@ -22,14 +23,16 @@ pub(super) struct NumberInput {
 impl NumberInput {
     fn new(
         label: &'static str,
-        initial: f64,
+        initial: impl ToString,
         min: f64,
         max: f64,
         step: f64,
         cx: &mut Context<Self>,
     ) -> Self {
+        let text = initial.to_string();
+        let initial = text.parse().expect("numeric setting");
         Self {
-            input: cx.new(|cx| TextField::new(initial.to_string(), label, cx)),
+            input: cx.new(|cx| TextField::new(text, label, cx)),
             label,
             min,
             max,
@@ -46,6 +49,8 @@ impl NumberInput {
     fn step(&mut self, direction: f64, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.value(cx).unwrap_or(self.initial);
         let value = (value + direction * self.step).clamp(self.min, self.max);
+        // Decimal increments such as 0.1 should not expose binary rounding noise.
+        let value = (value * 1_000_000.).round() / 1_000_000.;
         self.input.update(cx, |input, cx| {
             input.set_text(value.to_string(), window, cx)
         });
@@ -171,12 +176,14 @@ impl TerminalApp {
                 cx,
             )
         });
-        let size = cx
-            .new(|cx| NumberInput::new("글꼴 크기", self.draft.font_size as f64, 8., 48., 1., cx));
+        let size =
+            cx.new(|cx| NumberInput::new("글꼴 크기", self.draft.font_size, 8., 48., 1., cx));
+        let line_height =
+            cx.new(|cx| NumberInput::new("줄 높이 배율", self.draft.line_height, 0.5, 3., 0.1, cx));
         let history = cx.new(|cx| {
             NumberInput::new(
                 "스크롤백 줄 수",
-                self.draft.scrollback as f64,
+                self.draft.scrollback,
                 0.,
                 1_000_000.,
                 1000.,
@@ -214,6 +221,7 @@ impl TerminalApp {
             theme,
             font,
             size,
+            line_height,
             history,
             _subscriptions: subscriptions,
         });
@@ -232,7 +240,13 @@ impl TerminalApp {
                 .value(cx)
                 .filter(|value| value.fract() == 0.)
                 .ok_or("스크롤백에 0–1000000 사이의 정수를 입력하세요.")?;
+            let line_height = prefs
+                .line_height
+                .read(cx)
+                .value(cx)
+                .ok_or("줄 높이 배율에 0.5–3.0 사이의 숫자를 입력하세요.")?;
             self.draft.font_size = size as f32;
+            self.draft.line_height = line_height as f32;
             self.draft.scrollback = history as usize;
         }
         Ok(())
@@ -256,6 +270,7 @@ impl TerminalApp {
             .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창입니다. 대상 창이 없으면 새 창을 만듭니다.", theme, selector(&prefs.behavior)))
             .child(setting("터미널 글꼴", "설치된 글꼴을 검색해 선택합니다. 터미널에는 고정폭 글꼴을 권장합니다.", theme, selector(&prefs.font)))
             .child(setting("글꼴 크기", "터미널의 글꼴 크기입니다. 8–48 px 사이로 설정합니다.", theme, number(&prefs.size)))
+            .child(setting("줄 높이", "글꼴 크기에 곱할 배율입니다. 기본값 1.2 · 범위 0.5–3.0", theme, number(&prefs.line_height)))
             .child(setting("스크롤백", "탭마다 보관할 줄 수입니다. 최대 1,000,000줄까지 설정할 수 있습니다.", theme, number(&prefs.history)))
             .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", theme, selector(&prefs.theme)))
             .child(setting("창을 닫을 때 확인", "열린 세션이 있으면 창을 닫기 전에 확인합니다.", theme,

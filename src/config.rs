@@ -17,6 +17,8 @@ pub struct Settings {
     pub default_profile: String,
     pub font_family: String,
     pub font_size: f32,
+    /// Terminal row height as a multiple of the configured font size.
+    pub line_height: f32,
     pub scrollback: usize,
     pub theme: String,
     pub confirm_close: bool,
@@ -39,6 +41,7 @@ impl Default for Settings {
             }
             .into(),
             font_size: 15.,
+            line_height: 1.2,
             scrollback: 10_000,
             theme: "system".into(),
             confirm_close: true,
@@ -105,6 +108,9 @@ impl Settings {
         shortcuts::Bindings::new(&self.keybindings)?;
         if !self.font_size.is_finite() || !(8. ..=48.).contains(&self.font_size) {
             bail!("글꼴 크기는 8–48이어야 합니다.");
+        }
+        if !self.line_height.is_finite() || !(0.5..=3.).contains(&self.line_height) {
+            bail!("줄 높이 배율은 0.5–3.0이어야 합니다.");
         }
         if self.font_family.trim().is_empty() {
             bail!("글꼴 이름을 입력하세요.");
@@ -233,6 +239,7 @@ mod tests {
     fn legacy_settings_default_to_current_desktop_and_all_modes_round_trip() {
         let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
         assert_eq!(legacy.windowing_behavior, WindowingBehavior::CurrentDesktop);
+        assert_eq!(legacy.line_height, 1.2);
         for mode in WindowingBehavior::ALL {
             let settings = Settings {
                 windowing_behavior: mode,
@@ -242,6 +249,38 @@ mod tests {
             assert_eq!(settings, parsed);
         }
         assert!(toml::from_str::<Settings>("windowing_behavior = 'unknown'").is_err());
+    }
+
+    #[test]
+    fn line_height_defaults_round_trips_and_rejects_invalid_multipliers() {
+        assert_eq!(Settings::default().line_height, 1.2);
+        for line_height in [0.5, 1., 1.2, 1.5, 3.] {
+            let settings = Settings {
+                line_height,
+                ..Settings::default()
+            };
+            settings.validate().unwrap();
+            let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(parsed.line_height, line_height);
+        }
+        for line_height in [
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.,
+            0.,
+            0.49,
+            3.01,
+        ] {
+            assert!(
+                Settings {
+                    line_height,
+                    ..Settings::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 
     #[test]

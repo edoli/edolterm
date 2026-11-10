@@ -7,11 +7,11 @@ pub(super) struct ViewportRows {
 }
 
 impl ViewportRows {
-    pub fn fit(view_height: f32, measured_height: f32, scale: f32) -> Self {
+    pub fn fit(view_height: f32, font_size: f32, line_height: f32, scale: f32) -> Self {
         let scale = scale.max(0.1);
-        // A small amount of leading matches the reference's 28 px row at 150%
-        // without inflating the font's natural height by a percentage.
-        let cell_px = ((measured_height + 1.) * scale).round().max(1.);
+        // The user controls leading as a font-size multiplier. Snap to device
+        // pixels so glyphs, hit testing, backgrounds, and cursor share a grid.
+        let cell_px = (font_size * line_height * scale).round().max(1.);
         let view_px = (view_height * scale).floor().max(1.);
         let padding_px = (6. * scale).ceil();
         let count = ((view_px - 2. * padding_px) / cell_px)
@@ -42,6 +42,13 @@ impl super::TerminalView {
         let bottom = self.grid_top + rows as f32 * self.cell_height;
         let viewport = f32::from(self.bounds.size.height);
         let scale = window.scale_factor();
+        let expected_height = (self.settings.font_size * self.settings.line_height * scale)
+            .round()
+            .max(1.);
+        anyhow::ensure!(
+            (self.cell_height * scale - expected_height).abs() < 0.001,
+            "row height does not match the configured multiplier"
+        );
         let bottom_gap = viewport - bottom;
         anyhow::ensure!(
             (bottom_gap - 6.).abs() <= 2. / scale + 0.001,
@@ -64,6 +71,7 @@ impl super::TerminalView {
         let metrics = serde_json::json!({
             "font": self.settings.font_family,
             "font_size_dip": self.settings.font_size,
+            "line_height_multiplier": self.settings.line_height,
             "scale": scale,
             "viewport_height_dip": viewport,
             "font_height_dip": font_height,
@@ -108,13 +116,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn font_metrics_are_rounded_in_device_pixels() {
-        // Installed Cascadia Mono: 2380 units tall, 2048 units/em, at 15 DIP.
-        let layout = ViewportRows::fit(600., 15. * 2380. / 2048., 1.5);
-        // Attached reference: Windows Terminal has ~28 physical pixels per row.
-        assert!((layout.height * 1.5 - 28.).abs() < 0.0001);
-        assert!(layout.height > 26. / 1.5); // Previous tight natural-height layout.
-        assert!(layout.height < 22.); // Previous ceil(15 * 1.45).
+    fn font_size_multiplier_is_rounded_in_device_pixels() {
+        for (font_size, multiplier, scale, device_height) in [
+            (15., 1.2, 1., 18.),
+            (15., 1.2, 1.5, 27.),
+            (20., 1.5, 1.5, 45.),
+            (15.5, 1.2, 1.25, 23.),
+            (8., 0.5, 2., 8.),
+        ] {
+            let layout = ViewportRows::fit(600., font_size, multiplier, scale);
+            assert!((layout.height * scale - device_height).abs() < 0.0001);
+        }
     }
 
     #[test]
@@ -122,7 +134,7 @@ mod tests {
         for scale in [1., 1.25, 1.5, 2.] {
             let mut previous = 0;
             for height in 100..900 {
-                let layout = ViewportRows::fit(height as f32 + 0.25, 18.6, scale);
+                let layout = ViewportRows::fit(height as f32 + 0.25, 15.5, 1.2, scale);
                 let bottom = layout.top + layout.count as f32 * layout.height;
                 let bottom_gap = height as f32 + 0.25 - bottom;
                 assert!(bottom_gap >= 6. - 0.001);
@@ -139,7 +151,7 @@ mod tests {
 
     #[test]
     fn tiny_viewports_still_have_a_valid_cell() {
-        let layout = ViewportRows::fit(0., 18., 1.5);
+        let layout = ViewportRows::fit(0., 15., 1.2, 1.5);
         assert_eq!(layout.count, 1);
         assert_eq!(layout.top, 0.);
     }
