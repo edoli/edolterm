@@ -41,9 +41,9 @@ impl ViewportRows {
         Self {
             height: cell_px / scale,
             count,
-            // Keep the bottom inset fixed. Put the incomplete row above the
-            // grid so resizing cannot accumulate extra space below the prompt.
-            top: (view_px - count as f32 * cell_px - padding_px).max(0.) / scale,
+            // Anchor the first row to the top inset; any incomplete row stays
+            // below the grid. Only shrink the inset in exceptionally tiny views.
+            top: padding_px.min((view_px - cell_px).max(0.)) / scale,
         }
     }
 }
@@ -87,9 +87,15 @@ impl super::TerminalView {
             "row height does not match the configured multiplier"
         );
         let bottom_gap = viewport - bottom;
+        let padding = (6. * scale).ceil() / scale;
         anyhow::ensure!(
-            (bottom_gap - 6.).abs() <= 2. / scale + 0.001,
-            "bottom inset is not fixed: {bottom_gap}"
+            (self.grid_top - padding).abs() < 0.001,
+            "top inset is not fixed: {}",
+            self.grid_top
+        );
+        anyhow::ensure!(
+            bottom_gap >= padding - 0.001 && bottom_gap < padding + self.cell_height + 1. / scale,
+            "bottom inset does not contain the remaining space: {bottom_gap}"
         );
         let last_row_center = self.bounds.origin
             + point(
@@ -215,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn resizing_keeps_full_rows_with_a_fixed_bottom_inset() {
+    fn resizing_keeps_full_rows_with_a_fixed_top_inset() {
         for scale in [1., 1.25, 1.5, 2.] {
             let mut previous = 0;
             for height in 100..900 {
@@ -224,9 +230,8 @@ mod tests {
                 let bottom_gap = height as f32 + 0.25 - bottom;
                 assert!(bottom_gap >= 6. - 0.001);
                 let expected_gap = (6.0_f32 * scale).ceil() / scale;
-                assert!((bottom_gap - expected_gap).abs() <= 1. / scale + 0.001);
-                assert!(layout.top >= 6. - 0.001);
-                assert!(layout.top < 6. + layout.height + 1. / scale);
+                assert!(bottom_gap < expected_gap + layout.height + 1. / scale);
+                assert!((layout.top - expected_gap).abs() < 0.001);
                 assert!((layout.height * scale - (layout.height * scale).round()).abs() < 0.001);
                 assert!(layout.count >= previous);
                 previous = layout.count;
