@@ -430,8 +430,23 @@ impl TerminalApp {
             .border_color(theme.border)
             .bg(if active { theme.bg } else { theme.bar })
             .when(!floating, |tab| {
+                let shortcuts = [
+                    Some(keybindings::Action::SwitchTab(index)),
+                    (index + 1 == self.tabs.len()).then_some(keybindings::Action::LastTab),
+                ]
+                .into_iter()
+                .flatten()
+                .map(|action| self.shortcut_label(action))
+                .filter(|label| !label.is_empty())
+                .collect::<Vec<_>>()
+                .join(" / ");
+                let tooltip = if shortcuts.is_empty() {
+                    title.clone()
+                } else {
+                    format!("{title} · {shortcuts}")
+                };
                 tab.hover(move |s| s.bg(if active { theme.bg } else { theme.hover }))
-                    .tooltip(tip(title.clone()))
+                    .tooltip(tip(tooltip))
             })
             .when(floating, |tab| tab.shadow_md().border_l_1())
             .cursor_default()
@@ -484,6 +499,17 @@ impl TerminalApp {
                     .id(("close-tab", id))
                     .role(Role::Button)
                     .aria_label("탭 닫기")
+                    .when(!floating, |button| {
+                        let shortcut = self.shortcut_label(keybindings::Action::CloseTab);
+                        let tooltip = if shortcut.is_empty() {
+                            "탭 닫기".into()
+                        } else {
+                            format!("탭 닫기 · {shortcut}")
+                        };
+                        button
+                            .block_mouse_except_scroll()
+                            .tooltip(tip(tooltip))
+                    })
                     .flex()
                     .items_center()
                     .justify_center()
@@ -493,6 +519,20 @@ impl TerminalApp {
                     .hover(move |s| s.bg(theme.hover))
                     .child(icon(Icon::Close, 14.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, _, window, cx| {
+                            this.begin_tab_rename(id, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Middle,
+                        cx.listener(move |this, _, window, cx| {
+                            this.close_tab(id, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.close_tab(id, window, cx);
                         cx.stop_propagation();
