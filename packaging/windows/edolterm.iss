@@ -20,6 +20,7 @@ DefaultGroupName={#AppDisplayName}
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 UsePreviousPrivileges=yes
+UsePreviousTasks=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763
@@ -37,7 +38,8 @@ Name: "korean"; MessagesFile: "compiler:Languages\Korean.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "explorer"; Description: "탐색기 우클릭 메뉴에 Edolterm에서 열기 추가 (Windows 11은 인증서 등록에 관리자 승인 필요)"; Flags: checkedonce
+; Preserve the previous selection during silent updates so removed integration is reinstalled.
+Name: "explorer"; Description: "탐색기 우클릭 메뉴에 Edolterm에서 열기 추가 (Windows 11은 인증서 등록에 관리자 승인 필요)"
 Name: "desktopicon"; Description: "바탕 화면 바로 가기 만들기"; Flags: unchecked
 
 [Files]
