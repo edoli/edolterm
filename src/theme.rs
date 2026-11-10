@@ -112,7 +112,7 @@ impl Theme {
                 cursor: rgb(0x85b6ff).into(),
             },
             tooltip: SurfaceColors {
-                bg: rgb(0x343b47).into(),
+                bg: rgb(0x181818).into(),
                 fg: rgb(0xffffff).into(),
             },
             danger: InteractiveColors {
