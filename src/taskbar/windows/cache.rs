@@ -13,11 +13,12 @@ const VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Task {
+    pub program: String,
     pub id: String,
     pub name: String,
     pub icon: PathBuf,
     // A changed binary at the same path must refresh Windows' icon registration.
-    stamp: Option<FileStamp>,
+    pub stamp: Option<FileStamp>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -120,6 +121,7 @@ impl IconCache {
                     }
                 });
                 Task {
+                    program: profile.program.clone(),
                     id: profile.id.clone(),
                     name: profile.name.clone(),
                     icon: icon.clone(),

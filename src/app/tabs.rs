@@ -243,11 +243,19 @@ impl TerminalApp {
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let id = tab.id;
         let active = index == self.active;
-        let (title, name, bell) = if let Some(terminal) = &tab.terminal {
+        let (title, leading, bell) = if let Some(terminal) = &tab.terminal {
             let terminal = terminal.read(cx);
-            (terminal.title.clone(), Icon::Terminal, terminal.bell)
+            (
+                terminal.title.clone(),
+                icons::profiles::element(&terminal.profile.program, 16., cx),
+                terminal.bell,
+            )
         } else {
-            ("설정".into(), Icon::Settings, false)
+            (
+                "설정".into(),
+                icon(Icon::Settings, 16.).into_any_element(),
+                false,
+            )
         };
         div()
             .id(("tab", id))
@@ -286,13 +294,25 @@ impl TerminalApp {
             })
             .child(
                 div()
+                    .relative()
                     .text_color(if bell { theme.bell } else { theme.accent })
                     .flex()
                     .items_center()
                     .justify_center()
                     .size(px(16.))
                     .flex_shrink_0()
-                    .child(icon(name, 16.)),
+                    .child(leading)
+                    .when(bell, |icon| {
+                        icon.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .right_0()
+                                .size(px(4.))
+                                .rounded_full()
+                                .bg(theme.bell),
+                        )
+                    }),
             )
             .child(
                 div()

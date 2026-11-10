@@ -125,7 +125,10 @@ impl TerminalApp {
                 "기본 프로필",
                 self.profiles
                     .iter()
-                    .map(|p| Choice::new(p.id.clone(), p.name.clone()))
+                    .map(|p| {
+                        Choice::new(p.id.clone(), p.name.clone())
+                            .with_profile_icon(p.program.clone())
+                    })
                     .collect(),
                 selected_profile,
                 false,

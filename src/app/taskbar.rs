@@ -1,7 +1,7 @@
 //! Keep Shell integration out of the first frame and foreground shell startup.
 use super::*;
 
-const STARTUP_GRACE: Duration = Duration::from_millis(100);
+pub(super) const STARTUP_GRACE: Duration = Duration::from_millis(100);
 
 pub(super) fn start(root: WeakEntity<TerminalApp>, window: &Window) {
     after_startup(root, window, |cx| {
@@ -22,7 +22,8 @@ fn update(cx: &mut App) {
         registry.detected_profiles().to_vec(),
         &cx.global::<windows::SharedSettings>().0.profiles,
     );
-    crate::taskbar::update(&profiles, &registry.dir);
+    let images = crate::taskbar::update(&profiles, &registry.dir);
+    icons::profiles::receive(images, cx);
 }
 
 pub(super) fn after_startup(

@@ -13,6 +13,7 @@ pub struct Choice {
     pub value: String,
     pub label: SharedString,
     search: String,
+    icon_program: Option<String>,
 }
 impl Choice {
     pub fn new(value: impl Into<String>, label: impl Into<SharedString>) -> Self {
@@ -21,7 +22,12 @@ impl Choice {
             value: value.into(),
             search: label.to_lowercase(),
             label,
+            icon_program: None,
         }
+    }
+    pub fn with_profile_icon(mut self, program: String) -> Self {
+        self.icon_program = Some(program);
+        self
     }
 }
 
@@ -284,6 +290,11 @@ impl Render for Select {
             .find(|item| item.value == self.selected)
             .map(|item| item.label.clone())
             .unwrap_or_else(|| self.selected.clone().into());
+        let icon_program = self
+            .items
+            .iter()
+            .find(|item| item.value == self.selected)
+            .and_then(|item| item.icon_program.clone());
         let mut root = div()
             .id("select")
             .w_full()
@@ -327,6 +338,9 @@ impl Render for Select {
                     .bg(theme.hover)
                     .cursor_pointer()
                     .hover(move |style| style.bg(theme.panel))
+                    .when_some(icon_program, |trigger, program| {
+                        trigger.child(crate::icons::profiles::element(&program, 16., cx))
+                    })
                     .child(div().flex_1().min_w_0().text_ellipsis().child(label))
                     .child(icon(Icon::ChevronDown, 14.))
                     .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx))),
@@ -390,6 +404,7 @@ impl Render for Select {
                                         .aria_selected(item.value == this.selected)
                                         .flex()
                                         .items_center()
+                                        .gap_2()
                                         .h(px(34.))
                                         .px_2()
                                         .rounded_sm()
@@ -399,6 +414,11 @@ impl Render for Select {
                                             row.bg(theme.input.selection)
                                         })
                                         .hover(move |style| style.bg(theme.hover))
+                                        .when_some(item.icon_program.as_ref(), |row, program| {
+                                            row.child(crate::icons::profiles::element(
+                                                program, 16., cx,
+                                            ))
+                                        })
                                         .child(div().text_ellipsis().child(item.label.clone()))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.choose(index, window, cx)

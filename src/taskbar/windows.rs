@@ -1,4 +1,5 @@
 use super::APP_ID;
+mod bitmap;
 mod cache;
 mod executable;
 use crate::{config::Profile, platform};
@@ -25,10 +26,21 @@ use windows::{
     core::{HSTRING, Interface, Result},
 };
 
-pub(super) fn schedule(profiles: Vec<Profile>, directory: &Path) {
-    static WORKER: OnceLock<Option<mpsc::Sender<Vec<Profile>>>> = OnceLock::new();
+struct Request {
+    profiles: Vec<Profile>,
+    publish: bool,
+    reply: async_channel::Sender<Vec<crate::icons::profiles::LoadedIcon>>,
+}
+
+pub(super) fn schedule(
+    profiles: Vec<Profile>,
+    directory: &Path,
+    publish: bool,
+) -> async_channel::Receiver<Vec<crate::icons::profiles::LoadedIcon>> {
+    static WORKER: OnceLock<Option<mpsc::Sender<Request>>> = OnceLock::new();
+    let (reply, images) = async_channel::bounded(1);
     let sender = WORKER.get_or_init(|| {
-        let (sender, receiver) = mpsc::channel::<Vec<Profile>>();
+        let (sender, receiver) = mpsc::channel::<Request>();
         let cache_path = directory.join("cache/taskbar-icons.json");
         match thread::Builder::new()
             .name("edolterm-jump-list".into())
@@ -40,11 +52,12 @@ pub(super) fn schedule(profiles: Vec<Profile>, directory: &Path) {
                     return;
                 }
                 let mut cache = IconCache::load(&cache_path);
-                while let Ok(mut profiles) = receiver.recv() {
+                let mut bitmaps = bitmap::BitmapCache::default();
+                while let Ok(mut request) = receiver.recv() {
                     for latest in receiver.try_iter() {
-                        profiles = latest;
+                        request = latest;
                     }
-                    if let Err(error) = publish(&profiles, &mut cache) {
+                    if let Err(error) = process(&request, &mut cache, &mut bitmaps) {
                         eprintln!("점프 목록 갱신 실패: {error:#}");
                     }
                     if let Err(error) = cache.save(&cache_path) {
@@ -61,16 +74,29 @@ pub(super) fn schedule(profiles: Vec<Profile>, directory: &Path) {
         }
     });
     if let Some(sender) = sender {
-        let _ = sender.send(profiles);
+        let _ = sender.send(Request {
+            profiles,
+            publish,
+            reply,
+        });
     }
+    images
 }
 
-fn publish(profiles: &[Profile], cache: &mut IconCache) -> anyhow::Result<()> {
+fn process(
+    request: &Request,
+    cache: &mut IconCache,
+    bitmaps: &mut bitmap::BitmapCache,
+) -> anyhow::Result<()> {
     let executable = std::env::current_exe()?;
-    let tasks = cache.tasks(profiles, &executable);
-    cache.publish_if_changed(&executable, &tasks, || {
-        publish_list(APP_ID, &executable, &tasks)
-    })?;
+    let tasks = cache.tasks(&request.profiles, &executable);
+    // UI images are delivered even if Windows rejects the Jump List update.
+    let _ = request.reply.try_send(bitmaps.load(&tasks));
+    if request.publish {
+        cache.publish_if_changed(&executable, &tasks, || {
+            publish_list(APP_ID, &executable, &tasks)
+        })?;
+    }
     Ok(())
 }
 

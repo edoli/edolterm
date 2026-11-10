@@ -65,6 +65,10 @@ pub fn start(
     cx.spawn(async move |cx| {
         cx.background_executor().timer(Duration::from_millis(800)).await;
         let mut failure = None;
+        #[cfg(all(feature = "ui-tests", windows))]
+        if let Err(error) = taskbar::profile_icons(&root, cx).await {
+            failure = Some(format!("{error:#}"));
+        }
         #[cfg(feature = "ui-tests")]
         if let Some(probe) = taskbar_probe
             && let Err(error) = taskbar::verify(probe, cx).await

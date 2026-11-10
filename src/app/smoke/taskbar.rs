@@ -11,7 +11,7 @@ pub(super) fn probe(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut Ap
     let weak = root.downgrade();
     let began = Instant::now();
     super::super::taskbar::after_startup(weak.clone(), window, move |cx| {
-        assert!(began.elapsed() >= Duration::from_millis(500));
+        assert!(began.elapsed() >= super::super::taskbar::STARTUP_GRACE);
         let root = weak.upgrade().expect("test window still exists");
         let terminal = root.read(cx).active_terminal().expect("active shell");
         let terminal = terminal.read(cx);
@@ -87,4 +87,46 @@ pub(super) async fn verify(probe: Probe, cx: &mut AsyncApp) -> Result<()> {
         .handle
         .update(cx, |app, window, cx| app.close_window(window, cx))?;
     result
+}
+
+#[cfg(windows)]
+pub(super) async fn profile_icons(root: &Entity<TerminalApp>, cx: &mut AsyncApp) -> Result<()> {
+    let (profiles, dir) = root.read_with(cx, |app, _| (app.profiles.clone(), app.dir.clone()));
+    let images = crate::taskbar::load_icons(&profiles, &dir);
+    cx.update(|cx| icons::profiles::receive(images, cx));
+    let began = Instant::now();
+    loop {
+        let loaded = cx.update(|cx| {
+            profiles
+                .iter()
+                .filter(|profile| matches!(profile.id.as_str(), "pwsh" | "powershell" | "cmd"))
+                .all(|profile| icons::profiles::get(&profile.program, cx).is_some())
+        });
+        if loaded {
+            break;
+        }
+        ensure!(
+            began.elapsed() < Duration::from_secs(5),
+            "native profile images did not reach the UI catalog"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+    }
+    cx.update(|cx| {
+        let report: Vec<_> = profiles
+            .iter()
+            .map(|profile| {
+                serde_json::json!({
+                    "profile": profile.id,
+                    "image": icons::profiles::get(&profile.program, cx).map(|image| image.id.0),
+                })
+            })
+            .collect();
+        config::atomic_write(
+            &dir.join("profile-icons.json"),
+            &serde_json::to_vec_pretty(&report).unwrap(),
+        )
+    })?;
+    Ok(())
 }

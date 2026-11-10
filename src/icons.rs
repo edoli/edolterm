@@ -1,6 +1,7 @@
 //! Monochrome SVG assets use a fixed view box instead of font glyph baselines.
 use gpui::{prelude::*, *};
 use std::borrow::Cow;
+pub mod profiles;
 
 macro_rules! icons {
     ($($name:ident => $file:literal),+ $(,)?) => {

@@ -992,7 +992,11 @@ impl TerminalApp {
                         theme.panel
                     })
                     .hover(|s| s.bg(theme.hover))
-                    .child(icon(Icon::Terminal, 16.).text_color(theme.accent))
+                    .child(
+                        div()
+                            .text_color(theme.accent)
+                            .child(icons::profiles::element(&p.program, 16., cx)),
+                    )
                     .child(
                         div()
                             .flex_1()
