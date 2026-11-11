@@ -1,4 +1,8 @@
-﻿param([string]$OutputDir = 'target/release', [ValidateSet('release', 'release-dist')][string]$Profile = 'release')
+﻿param(
+    [string]$OutputDir = 'target/release',
+    [ValidateSet('release', 'release-dist')][string]$Profile = 'release',
+    [switch]$RuntimeOnly
+)
 $ErrorActionPreference = 'Stop'
 function Copy-BundleFile([string]$Source, [string]$Destination) {
     if ((Test-Path -LiteralPath $Destination -PathType Leaf) -and
@@ -22,16 +26,20 @@ if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHas
 Expand-Archive -LiteralPath $archive -DestinationPath $packageDir -Force
 $destination = Join-Path $projectDir $OutputDir
 [IO.Directory]::CreateDirectory($destination) | Out-Null
+Copy-BundleFile (Join-Path $packageDir 'runtimes/win-x64/native/conpty.dll') (Join-Path $destination 'conpty.dll')
+# Alacritty 0.26 uses the compatibility CreatePseudoConsole exports, which
+# resolve OpenConsole.exe next to conpty.dll (verified in the integration runs).
+Copy-BundleFile (Join-Path $packageDir 'build/native/runtimes/x64/OpenConsole.exe') (Join-Path $destination 'OpenConsole.exe')
+if ($RuntimeOnly) {
+    Write-Output "ConPTY runtime: $destination"
+    return
+}
 $sourceExe = Join-Path $projectDir "target/$Profile/edolterm.exe"
 $destinationExe = Join-Path $destination 'edolterm.exe'
 if (-not (Test-Path -LiteralPath $sourceExe)) { throw 'Build edolterm with cargo build --release first' }
 if ([IO.Path]::GetFullPath($sourceExe) -ne [IO.Path]::GetFullPath($destinationExe)) {
     Copy-BundleFile $sourceExe $destinationExe
 }
-Copy-BundleFile (Join-Path $packageDir 'runtimes/win-x64/native/conpty.dll') (Join-Path $destination 'conpty.dll')
-# Alacritty 0.26 uses the compatibility CreatePseudoConsole exports, which
-# resolve OpenConsole.exe next to conpty.dll (verified in the integration runs).
-Copy-BundleFile (Join-Path $packageDir 'build/native/runtimes/x64/OpenConsole.exe') (Join-Path $destination 'OpenConsole.exe')
 Copy-BundleFile (Join-Path $PSScriptRoot 'explorer-context-menu.ps1') (Join-Path $destination 'explorer-context-menu.ps1')
 Invoke-WebRequest 'https://raw.githubusercontent.com/microsoft/terminal/v1.25.2733.0/LICENSE' -OutFile (Join-Path $destination 'LICENSE-ConPTY.txt')
 [IO.File]::AppendAllText((Join-Path $destination 'LICENSE-ConPTY.txt'), "`r`n--- Alacritty pipe adapter (Apache-2.0) ---`r`n" +
