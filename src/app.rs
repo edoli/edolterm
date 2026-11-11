@@ -17,16 +17,19 @@ mod scrollbar;
 mod shortcuts;
 #[cfg(debug_assertions)]
 mod smoke;
+mod tab_menu;
 mod tabs;
 mod taskbar;
 mod windows;
 use config::shortcuts::{self as keybindings, Bindings};
 use shortcuts::SettingsPage;
+use tab_menu::TabMenu;
 use tabs::{TabDrag, TabMotion, TabRename};
 
 struct Tab {
     id: u64,
     custom_title: Option<String>,
+    color: Option<u32>,
     terminal: Option<Entity<TerminalView>>,
     _subscription: Option<Subscription>,
 }
@@ -76,6 +79,7 @@ pub struct TerminalApp {
     tab_drag: Option<TabDrag>,
     tab_motions: Vec<TabMotion>,
     tab_rename: Option<TabRename>,
+    tab_menu: Option<TabMenu>,
     menu: bool,
     menu_index: usize,
     confirm: bool,
@@ -128,6 +132,9 @@ impl TerminalApp {
                 }
                 if !window.is_window_active() {
                     this.finish_tab_drag(true, window, cx);
+                    if this.tab_menu.take().is_some() {
+                        this.restore_focus(window, cx);
+                    }
                 }
                 cx.notify();
             }),
@@ -178,6 +185,7 @@ impl TerminalApp {
             tab_drag: None,
             tab_motions: Vec::new(),
             tab_rename: None,
+            tab_menu: None,
             menu: false,
             menu_index: 0,
             confirm: false,
@@ -235,6 +243,8 @@ impl TerminalApp {
                     }
                     this.create_terminal(profile, Some(tab.cwd), window, cx);
                     this.tabs.last_mut().unwrap().custom_title = tab.custom_title;
+                    this.tabs.last_mut().unwrap().color =
+                        tab.color.filter(|color| *color <= 0xffffff);
                 }
             }
             if !this.tabs.is_empty() {
@@ -316,6 +326,7 @@ impl TerminalApp {
         self.tabs.push(Tab {
             id,
             custom_title: None,
+            color: None,
             terminal: Some(terminal),
             _subscription: Some(subscription),
         });
@@ -364,6 +375,7 @@ impl TerminalApp {
         }
         self.active = index;
         self.tab_rename = None;
+        self.tab_menu = None;
         self.shortcut_capture = None;
         self.search_visible = false;
         self.menu = false;
@@ -405,6 +417,7 @@ impl TerminalApp {
             self.tabs.push(Tab {
                 id: 0,
                 custom_title: None,
+                color: None,
                 terminal: None,
                 _subscription: None,
             });
@@ -457,6 +470,7 @@ impl TerminalApp {
         if self.settings.confirm_close && (active || other_active) {
             self.confirm = true;
             self.tab_rename = None;
+            self.tab_menu = None;
             self.menu = false;
             self.focus.focus(window, cx);
             cx.notify();
@@ -477,6 +491,7 @@ impl TerminalApp {
                     profile_id: t.profile.id.clone(),
                     cwd: t.working_directory(),
                     custom_title: tab.custom_title.clone(),
+                    color: tab.color,
                 })
             })
             .collect();
@@ -714,6 +729,9 @@ impl TerminalApp {
         }
         // The rename dialog owns keyboard input, including text editing shortcuts.
         if self.tab_rename_key(e, window, cx) {
+            return;
+        }
+        if self.tab_menu_key(e, window, cx) {
             return;
         }
         if self.menu && !m.control && !m.alt {
@@ -1513,6 +1531,9 @@ impl Render for TerminalApp {
         if self.tab_rename.is_some() {
             root = root.child(self.tab_rename_dialog(cx));
         }
+        if self.tab_menu.is_some() {
+            root = root.child(self.tab_context_menu(window, cx));
+        }
         if self.confirm || self.closing {
             let closing = self.closing;
             root = root.child(div().absolute().inset_0().flex().items_center().justify_center().bg(theme.overlay)
@@ -1636,11 +1657,7 @@ pub fn run(launch_options: crate::cli::Options) {
                     cx.spawn(async move |cx| {
                         while let Ok(mut envelope) = requests.recv().await {
                             let result = cx.update(|cx| {
-                                windows::route(
-                                    &envelope.request,
-                                    envelope.handoff.take(),
-                                    cx,
-                                )
+                                windows::route(&envelope.request, envelope.handoff.take(), cx)
                             });
                             let _ = envelope.reply.send(result);
                         }

@@ -263,6 +263,32 @@ pub(super) async fn rename(
             let shell_title = terminal.read(cx).title.clone();
             click_tab(x, MouseButton::Right, 1, window, cx);
             anyhow::ensure!(
+                root.read(cx).tab_menu.is_some(),
+                "right click did not open context menu"
+            );
+            screenshot(root, "tab-context-menu.png", window, cx)?;
+            window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+            draw(window, cx);
+            anyhow::ensure!(
+                root.read(cx)
+                    .tab_menu
+                    .as_ref()
+                    .is_some_and(|menu| menu.colors),
+                "color menu did not open"
+            );
+            screenshot(root, "tab-color-palette.png", window, cx)?;
+            window.dispatch_keystroke(Keystroke::parse("down")?, cx);
+            window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+            draw(window, cx);
+            anyhow::ensure!(
+                root.read(cx).tabs[1].color == Some(0xe74856),
+                "palette did not apply tab color"
+            );
+            click_tab(x, MouseButton::Right, 1, window, cx);
+            window.dispatch_keystroke(Keystroke::parse("down")?, cx);
+            window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+            draw(window, cx);
+            anyhow::ensure!(
                 root.read(cx).active == 1,
                 "right click did not select the target tab"
             );
@@ -273,7 +299,7 @@ pub(super) async fn rename(
             .read(cx)
             .tab_rename
             .as_ref()
-            .expect("right click opens rename")
+            .expect("context menu opens rename")
             .input
             .clone();
         anyhow::ensure!(
@@ -357,6 +383,10 @@ pub(super) async fn rename(
             restored.read(cx).tabs[1].title(cx) == "개발 서버 🙂",
             "session restore lost custom title"
         );
+        anyhow::ensure!(
+            restored.read(cx).tabs[1].color == Some(0xe74856),
+            "session restore lost tab color"
+        );
         restored.update(cx, |app, cx| {
             for tab in &app.tabs {
                 if let Some(terminal) = &tab.terminal {
@@ -389,6 +419,9 @@ pub(super) async fn rename(
         );
 
         click_tab(x, MouseButton::Right, 1, window, cx);
+        window.dispatch_keystroke(Keystroke::parse("down")?, cx);
+        window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+        draw(window, cx);
         let input = root.read(cx).tab_rename.as_ref().unwrap().input.clone();
         input.update(cx, |input, cx| input.set_text("   ", window, cx));
         window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
@@ -411,6 +444,14 @@ pub(super) async fn rename(
             terminal.title = shell_title;
             cx.emit(TerminalEvent::Metadata);
         });
+        click_tab(x, MouseButton::Right, 1, window, cx);
+        window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+        window.dispatch_keystroke(Keystroke::parse("home")?, cx);
+        window.dispatch_keystroke(Keystroke::parse("enter")?, cx);
+        anyhow::ensure!(
+            root.read(cx).tabs[1].color.is_none(),
+            "palette reset failed"
+        );
         root.update(cx, |app, cx| {
             anyhow::ensure!(app.tabs[1].id == target, "rename changed tab order");
             app.activate(active, window, cx);

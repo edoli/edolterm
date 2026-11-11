@@ -32,13 +32,12 @@ impl TerminalApp {
         match action {
             Action::NewTab => self.new_default(window, cx),
             Action::DuplicateTab => {
-                let Some(terminal) = self.active_terminal() else {
+                let Some(tab) = self.tabs.get(self.active) else {
                     return false;
                 };
-                let view = terminal.read(cx);
-                let profile = view.profile.clone();
-                let cwd = view.working_directory();
-                self.add_terminal(profile, Some(cwd), window, cx);
+                if !self.duplicate_tab(tab.id, window, cx) {
+                    return false;
+                }
             }
             Action::NewWindow => {
                 if let Err(error) = windows::open_default(cx) {

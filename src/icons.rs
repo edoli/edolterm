@@ -27,6 +27,7 @@ icons! {
     Close => "close", Trash => "trash", Plus => "plus", ChevronDown => "chevron-down",
     Terminal => "terminal", Settings => "settings",
     ArrowUp => "arrow-up", ArrowDown => "arrow-down",
+    Palette => "palette", Rename => "rename", Copy => "copy", Export => "export", Search => "search",
 }
 
 #[derive(IntoElement)]

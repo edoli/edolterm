@@ -53,7 +53,12 @@ impl TerminalApp {
         }
     }
 
-    fn begin_tab_rename(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn begin_tab_rename(
+        &mut self,
+        id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(index) = self
             .tabs
             .iter()
@@ -403,6 +408,23 @@ impl TerminalApp {
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let id = tab.id;
         let active = index == self.active;
+        let color: Hsla = tab
+            .color
+            .map(|color| rgb(color).into())
+            .unwrap_or(theme.accent);
+        let base = if active { theme.bg } else { theme.bar };
+        let background = if tab.color.is_some() {
+            base.blend(color.opacity(0.2))
+        } else {
+            base
+        };
+        let hover = if tab.color.is_some() {
+            background.blend(theme.fg.opacity(0.06))
+        } else if active {
+            theme.bg
+        } else {
+            theme.hover
+        };
         let title = tab.title(cx);
         let (leading, bell) = if let Some(terminal) = &tab.terminal {
             let terminal = terminal.read(cx);
@@ -428,7 +450,7 @@ impl TerminalApp {
             .gap_2()
             .border_r_1()
             .border_color(theme.border)
-            .bg(if active { theme.bg } else { theme.bar })
+            .bg(background)
             .when(!floating, |tab| {
                 let shortcuts = [
                     Some(keybindings::Action::SwitchTab(index)),
@@ -445,14 +467,13 @@ impl TerminalApp {
                 } else {
                     format!("{title} · {shortcuts}")
                 };
-                tab.hover(move |s| s.bg(if active { theme.bg } else { theme.hover }))
-                    .tooltip(tip(tooltip))
+                tab.hover(move |s| s.bg(hover)).tooltip(tip(tooltip))
             })
             .when(floating, |tab| tab.shadow_md().border_l_1())
             .cursor_default()
             .text_size(px(12.))
             .text_color(if active { theme.fg } else { theme.muted })
-            .when(active, |tab| {
+            .when(active || tab.color.is_some(), |tab| {
                 tab.child(
                     div()
                         .absolute()
@@ -460,7 +481,7 @@ impl TerminalApp {
                         .right_0()
                         .top_0()
                         .h(px(2.))
-                        .bg(theme.accent),
+                        .bg(color),
                 )
             })
             .child(
@@ -506,9 +527,7 @@ impl TerminalApp {
                         } else {
                             format!("탭 닫기 · {shortcut}")
                         };
-                        button
-                            .block_mouse_except_scroll()
-                            .tooltip(tip(tooltip))
+                        button.block_mouse_except_scroll().tooltip(tip(tooltip))
                     })
                     .flex()
                     .items_center()
@@ -521,8 +540,8 @@ impl TerminalApp {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_down(
                         MouseButton::Right,
-                        cx.listener(move |this, _, window, cx| {
-                            this.begin_tab_rename(id, window, cx);
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            this.show_tab_menu(id, event.position, window, cx);
                             cx.stop_propagation();
                         }),
                     )
@@ -550,7 +569,7 @@ impl TerminalApp {
                 }),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                if this.tab_rename.is_some() {
+                if this.tab_rename.is_some() || this.tab_menu.is_some() {
                     return;
                 }
                 if let Some(index) = this.tabs.iter().position(|tab| tab.id == id) {
@@ -559,8 +578,8 @@ impl TerminalApp {
             }))
             .on_mouse_down(
                 MouseButton::Right,
-                cx.listener(move |this, _, window, cx| {
-                    this.begin_tab_rename(id, window, cx);
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.show_tab_menu(id, event.position, window, cx);
                     cx.stop_propagation();
                 }),
             )

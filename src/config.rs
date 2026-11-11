@@ -225,6 +225,8 @@ pub struct SavedTab {
     pub cwd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
 }
 
 impl SavedSession {
@@ -244,19 +246,22 @@ impl SavedSession {
 mod tests {
     use super::*;
     #[test]
-    fn saved_tab_titles_are_optional_and_round_trip() {
+    fn saved_tab_titles_and_colors_are_optional_and_round_trip() {
         let legacy = r#"{"tabs":[{"profile_id":"shell","cwd":"."}]}"#;
         let mut saved: SavedSession = serde_json::from_str(legacy).unwrap();
         assert_eq!(saved.tabs[0].custom_title, None);
+        assert_eq!(saved.tabs[0].color, None);
         assert!(
             !serde_json::to_string(&saved)
                 .unwrap()
                 .contains("custom_title")
         );
         saved.tabs[0].custom_title = Some("서버 🙂".into());
+        saved.tabs[0].color = Some(0xe74856);
         let restored: SavedSession =
             serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
         assert_eq!(restored.tabs[0].custom_title.as_deref(), Some("서버 🙂"));
+        assert_eq!(restored.tabs[0].color, Some(0xe74856));
     }
 
     #[test]

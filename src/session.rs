@@ -1,5 +1,4 @@
 use crate::config::{Profile, Settings};
-#[cfg(any(test, debug_assertions))]
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::{
     Term,
@@ -288,7 +287,6 @@ impl Session {
         let _ = self.sender.send(Msg::Shutdown);
     }
 
-    #[cfg(any(test, debug_assertions))]
     pub fn plain_text(&self) -> String {
         let term = self.terminal.lock();
         term.bounds_to_string(
@@ -362,6 +360,7 @@ mod tests {
                 profile_id: profile.id.clone(),
                 cwd: session.working_directory(),
                 custom_title: None,
+                color: None,
             });
             stop_and_wait(&session);
         }
