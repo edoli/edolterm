@@ -281,7 +281,7 @@ impl TerminalApp {
             .child(div().mb_4().text_color(theme.muted).child("설정은 저장하면 열린 터미널에도 적용됩니다."))
             .when(cfg!(windows), |content| {
                 #[cfg(windows)]
-                { content.child(setting("Windows 기본 터미널", "새로 실행하는 콘솔을 Edolterm으로 엽니다. Windows 11 또는 업데이트된 Windows 10 22H2와 Windows 연동 설치가 필요합니다.", theme,
+                { content.child(setting("Windows 기본 터미널", "새로 실행하는 콘솔을 Edolterm으로 엽니다. Windows 11 또는 업데이트된 Windows 10 22H2의 설치형에서 사용할 수 있으며, 설치 시 선택하지 않아도 여기서 설정할 수 있습니다.", theme,
                     div().flex().flex_wrap().gap_2()
                         .child(settings_button("set-default-terminal", "기본 터미널로 설정", theme).on_click(cx.listener(|this, _, _, cx| this.change_default_terminal(false, cx))))
                         .child(settings_button("restore-default-terminal", "이전 설정 복원", theme).on_click(cx.listener(|this, _, _, cx| this.change_default_terminal(true, cx)))))) }

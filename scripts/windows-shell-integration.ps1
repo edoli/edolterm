@@ -3,7 +3,9 @@
     [string]$Action = 'Install',
     [string]$AppDirectory = $PSScriptRoot,
     [ValidateSet('User', 'Machine')][string]$Scope = 'User',
-    [switch]$PreserveDefaultTerminal
+    [switch]$PreserveDefaultTerminal,
+    [switch]$DisableExplorerMenu,
+    [switch]$SetDefaultTerminal
 )
 $ErrorActionPreference = 'Stop'
 # Inno can inherit PowerShell 7's PSModulePath from its launching process.
@@ -12,6 +14,8 @@ if ($PSEdition -eq 'Core') {
     $windowsPowerShell = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
     $extra = @()
     if ($PreserveDefaultTerminal) { $extra += '-PreserveDefaultTerminal' }
+    if ($SetDefaultTerminal) { $extra += '-SetDefaultTerminal' }
+    if ($DisableExplorerMenu) { $extra += '-DisableExplorerMenu' }
     & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -Action $Action -AppDirectory $AppDirectory -Scope $Scope @extra
     exit $LASTEXITCODE
 }
@@ -25,6 +29,18 @@ Start-Transcript -Path (Join-Path $logDirectory "explorer-$Action.log") -Append 
 $packageName = 'Edoli.Edolterm.ShellIntegration'
 $certificateFile = Join-Path $AppDirectory 'Edolterm.Development.cer'
 $packageFile = Join-Path $AppDirectory 'Edolterm.Explorer.msix'
+$menuFlag = Join-Path $terminalDirectory 'explorer-integration.enabled'
+$integrationFlag = Join-Path $terminalDirectory 'windows-integration.enabled'
+function Save-IntegrationSelection {
+    if ($DisableExplorerMenu) {
+        if (Test-Path -LiteralPath $menuFlag) { Remove-Item -LiteralPath $menuFlag -Force }
+    } elseif (-not (Test-Path -LiteralPath $menuFlag)) {
+        [IO.File]::WriteAllText($menuFlag, 'enabled')
+    }
+    if (-not (Test-Path -LiteralPath $integrationFlag)) {
+        [IO.File]::WriteAllText($integrationFlag, 'enabled')
+    }
+}
 function Is-Administrator {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -74,13 +90,24 @@ if ($Action -eq 'Uninstall') {
         }
     }
     if (Test-Path -LiteralPath $legacyScript) { & $legacyScript -Action Uninstall -Scope $Scope }
+    foreach ($flag in @($menuFlag, $integrationFlag)) {
+        if (Test-Path -LiteralPath $flag) { Remove-Item -LiteralPath $flag -Force }
+    }
     exit 0
 }
 if (-not (Test-EdoltermDefaultTerminalSupport (Get-EdoltermWindowsVersion))) {
+    if ($SetDefaultTerminal) {
+        throw '기본 터미널 설정에는 Windows 11 또는 업데이트된 Windows 10 22H2가 필요합니다.'
+    }
     # Older Windows 10 builds keep their registry menu and ordinary ConPTY tabs.
     # An OS update rollback must not retain a default pointing to an absent package.
     if (Test-Path -LiteralPath $defaultHelper) { & $defaultHelper -Action Restore }
-    & $legacyScript -Action Install -Scope $Scope -ExecutablePath (Join-Path $terminalDirectory 'edolterm.exe')
+    if ($DisableExplorerMenu) {
+        & $legacyScript -Action Uninstall -Scope $Scope
+    } else {
+        & $legacyScript -Action Install -Scope $Scope -ExecutablePath (Join-Path $terminalDirectory 'edolterm.exe')
+    }
+    Save-IntegrationSelection
     exit 0
 }
 $certificate = Read-PublicCertificate
@@ -106,5 +133,9 @@ if ($Scope -eq 'Machine') {
 }
 # Remove our legacy verbs only after the new command is successfully registered.
 & $legacyScript -Action Uninstall -Scope $Scope
-Write-Output 'Registered Edolterm Explorer and default-terminal integration for the current user.'
+Save-IntegrationSelection
+if ($SetDefaultTerminal) {
+    & $defaultHelper -Action Set
+}
+Write-Output "Registered Edolterm Windows integration; Explorer menu enabled: $(-not $DisableExplorerMenu)."
 Stop-Transcript | Out-Null

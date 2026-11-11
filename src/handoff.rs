@@ -237,7 +237,7 @@ pub fn change_default(restore: bool) -> Result<String> {
         .context("실행 경로")?
         .join("shell-integration/windows-default-terminal.ps1");
     if !helper.is_file() {
-        bail!("설치 프로그램에서 Windows 연동을 설치한 뒤 사용하세요.");
+        bail!("Edolterm 설치형을 설치한 뒤 사용하세요.");
     }
     let shell = std::path::PathBuf::from(std::env::var_os("SystemRoot").context("SystemRoot")?)
         .join("System32/WindowsPowerShell/v1.0/powershell.exe");

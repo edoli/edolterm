@@ -100,6 +100,14 @@ public:
     IFACEMETHODIMP GetState(IShellItemArray* selection, BOOL, EXPCMDSTATE* state) override {
         if (!state) return E_POINTER;
         *state = ECS_HIDDEN;
+        // Read on each query so changing the installer choice also updates a
+        // command object already cached by Explorer's COM surrogate.
+        try {
+            const auto flag = executable().parent_path() / L"explorer-integration.enabled";
+            const DWORD attributes = GetFileAttributesW(flag.c_str());
+            if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_DIRECTORY))
+                return S_OK;
+        } catch (...) { return S_OK; }
         ComPtr<IShellItem> item;
         if (FAILED(location(selection, &item))) return S_OK;
         SFGAOF attributes = 0;

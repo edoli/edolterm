@@ -39,7 +39,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 ; Preserve the previous selection during silent updates so removed integration is reinstalled.
-Name: "explorer"; Description: "탐색기 메뉴 및 Windows 기본 터미널 연동 설치 (인증서 등록 시 관리자 승인 필요)"
+Name: "explorer"; Description: "탐색기 메뉴에 Edolterm 등록"
+Name: "defaultterminal"; Description: "Edolterm을 현재 사용자의 기본 터미널로 설정"; Flags: unchecked; Check: DefaultTerminalSupported
 Name: "desktopicon"; Description: "바탕 화면 바로 가기 만들기"; Flags: unchecked
 
 [Files]
@@ -78,16 +79,49 @@ Filename: "{app}\edolterm.exe"; Description: "Edolterm 실행"; Flags: nowait po
 [UninstallDelete]
 Type: files; Name: "{app}\explorer-*.log"
 Type: files; Name: "{app}\explorer-integration.enabled"
+Type: files; Name: "{app}\terminal-integration.enabled"
+Type: files; Name: "{app}\windows-integration.enabled"
 
 [Code]
 var
   IntegrationFailed: Boolean;
+  IntegrationUpgrade: Boolean;
 
 function CreateFileW(lpFileName: String; dwDesiredAccess, dwShareMode, lpSecurityAttributes,
   dwCreationDisposition, dwFlagsAndAttributes: LongWord; hTemplateFile: THandle): THandle;
   external 'CreateFileW@kernel32.dll stdcall';
 function CloseHandle(hObject: THandle): Boolean;
   external 'CloseHandle@kernel32.dll stdcall';
+
+function DefaultTerminalSupported(): Boolean;
+var
+  Version: TWindowsVersion;
+  Revision: Cardinal;
+begin
+  GetWindowsVersionEx(Version);
+  Revision := 0;
+  RegQueryDWordValue(HKLM, 'SOFTWARE\Microsoft\Windows NT\CurrentVersion', 'UBR', Revision);
+  Result := (Version.Major = 10) and ((Version.Build >= 22000) or
+    ((Version.Build = 19045) and (Revision >= 3031)));
+end;
+
+function IntegrationInstalled(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{app}\windows-integration.enabled')) or
+    FileExists(ExpandConstant('{app}\explorer-integration.enabled')) or
+    FileExists(ExpandConstant('{app}\terminal-integration.enabled')) or
+    (FileExists(ExpandConstant('{app}\windows-shell-integration.ps1')) and
+     not FileExists(ExpandConstant('{app}\explorer-context-menu.ps1')));
+end;
+
+function ShouldSetDefaultTerminal(): Boolean;
+begin
+  { Silent updates retain integration without taking over a later user choice. }
+  Result := WizardIsTaskSelected('defaultterminal') and
+    (not WizardSilent or not IntegrationUpgrade or
+     (Pos(',defaultterminal,', ',' + Lowercase(ExpandConstant('{param:TASKS|}')) + ',') > 0) or
+     (Pos(',defaultterminal,', ',' + Lowercase(ExpandConstant('{param:MERGETASKS|}')) + ',') > 0));
+end;
 
 function RunShellIntegration(Action: String; PreserveDefault: Boolean): Boolean;
 var
@@ -105,9 +139,34 @@ begin
   { Older integration helpers predate this option and cannot accept it. }
   if PreserveDefault and FileExists(IntegrationDirectory + '\windows-default-terminal.ps1') then
     Parameters := Parameters + ' -PreserveDefaultTerminal';
+  if Action = 'Install' then
+  begin
+    if not WizardIsTaskSelected('explorer') then
+      Parameters := Parameters + ' -DisableExplorerMenu';
+    if ShouldSetDefaultTerminal() and not IsAdminInstallMode then
+      Parameters := Parameters + ' -SetDefaultTerminal';
+  end;
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Parameters, '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
-  Log('Explorer integration ' + Action + ': launched=' + IntToStr(Ord(Result)) + ', exit=' + IntToStr(ExitCode));
+  Log('Windows integration ' + Action + ': launched=' + IntToStr(Ord(Result)) + ', exit=' + IntToStr(ExitCode));
+  Result := Result and (ExitCode = 0);
+end;
+
+function SetOriginalUserDefaultTerminal(): Boolean;
+var
+  ExitCode: Integer;
+  Parameters, Directory: String;
+begin
+  Directory := ExpandConstant('{app}\shell-integration');
+  { Register the chosen package for the original user before changing that user's default. }
+  Parameters := '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
+    AddQuotes(Directory + '\windows-shell-integration.ps1') +
+    ' -Action Install -Scope User' +
+    ' -AppDirectory ' + AddQuotes(Directory) + ' -SetDefaultTerminal';
+  if not WizardIsTaskSelected('explorer') then Parameters := Parameters + ' -DisableExplorerMenu';
+  Result := ExecAsOriginalUser(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+    Parameters, '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  Log('Default terminal for original user: launched=' + IntToStr(Ord(Result)) + ', exit=' + IntToStr(ExitCode));
   Result := Result and (ExitCode = 0);
 end;
 
@@ -127,30 +186,49 @@ end;
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   Result := '';
+  if WizardIsTaskSelected('defaultterminal') and not DefaultTerminalSupported() then
+  begin
+    Result := '기본 터미널 설정에는 Windows 11 또는 업데이트된 Windows 10 22H2가 필요합니다.';
+    Exit;
+  end;
+  IntegrationUpgrade := IntegrationInstalled();
   if not ExecutableAvailable() then
   begin
     Result := 'Edolterm이 실행 중입니다. 모든 창을 직접 닫은 뒤 다시 설치하세요.';
     Exit;
   end;
-  if FileExists(ExpandConstant('{app}\explorer-integration.enabled')) or
-    (FileExists(ExpandConstant('{app}\windows-shell-integration.ps1')) and
-     not FileExists(ExpandConstant('{app}\explorer-context-menu.ps1'))) then
-    if not RunShellIntegration('Uninstall', WizardIsTaskSelected('explorer')) then
-      Result := '기존 탐색기 메뉴 등록을 해제하지 못했습니다. Edolterm을 종료한 뒤 다시 시도하세요.';
-  if Result = '' then DeleteFile(ExpandConstant('{app}\explorer-integration.enabled'));
+  if IntegrationInstalled() then
+    { Unchecking the task only skips setting a default; upgrades preserve the current choice. }
+    if not RunShellIntegration('Uninstall', True) then
+      Result := '기존 Windows 연동을 해제하지 못했습니다. Edolterm을 종료한 뒤 다시 시도하세요.';
+  if Result = '' then
+  begin
+    DeleteFile(ExpandConstant('{app}\explorer-integration.enabled'));
+    DeleteFile(ExpandConstant('{app}\terminal-integration.enabled'));
+    DeleteFile(ExpandConstant('{app}\windows-integration.enabled'));
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if (CurStep = ssPostInstall) and WizardIsTaskSelected('explorer') then
+  if CurStep = ssPostInstall then
   begin
-    SaveStringToFile(ExpandConstant('{app}\explorer-integration.enabled'), 'enabled', False);
+    { Leave markers on partial failure so uninstall can still clean up registration. }
+    if WizardIsTaskSelected('explorer') then
+      SaveStringToFile(ExpandConstant('{app}\explorer-integration.enabled'), 'enabled', False);
+    SaveStringToFile(ExpandConstant('{app}\windows-integration.enabled'), 'enabled', False);
     if not RunShellIntegration('Install', False) then
     begin
       IntegrationFailed := True;
-      SuppressibleMsgBox('Edolterm 메뉴 등록에 실패했습니다. 인증서 등록의 관리자 승인을 허용했는지 확인하세요.' + #13#10 +
+      SuppressibleMsgBox('Edolterm Windows 연동에 실패했습니다. 인증서 등록의 관리자 승인을 허용했는지 확인하세요.' + #13#10 +
         ExpandConstant('{localappdata}\Edolterm\Logs\explorer-Install.log'), mbError, MB_OK, IDOK);
     end;
+    if not IntegrationFailed and IsAdminInstallMode and ShouldSetDefaultTerminal() then
+      if not SetOriginalUserDefaultTerminal() then
+      begin
+        IntegrationFailed := True;
+        SuppressibleMsgBox('현재 사용자의 기본 터미널 설정에 실패했습니다. 설치를 다시 실행하거나 앱 설정에서 적용하세요.', mbError, MB_OK, IDOK);
+      end;
   end;
 end;
 
@@ -167,10 +245,10 @@ begin
     MsgBox('Edolterm이 실행 중입니다. 모든 창을 직접 닫은 뒤 제거하세요.', mbError, MB_OK);
     Exit;
   end;
-  if FileExists(ExpandConstant('{app}\explorer-integration.enabled')) then
+  if IntegrationInstalled() then
     if not RunShellIntegration('Uninstall', False) then
     begin
-      MsgBox('탐색기 메뉴 등록을 해제하지 못했습니다. 실행 중인 Edolterm을 종료한 뒤 다시 시도하세요.', mbError, MB_OK);
+      MsgBox('Windows 연동을 해제하지 못했습니다. 실행 중인 Edolterm을 종료한 뒤 다시 시도하세요.', mbError, MB_OK);
       Result := False;
     end;
 end;

@@ -37,7 +37,7 @@ if ($Action -eq 'Set') {
     }
     $env:PSModulePath = Join-Path $PSHOME 'Modules'
     $package = Get-AppxPackage -Name 'Edoli.Edolterm.ShellIntegration'
-    if (-not $package) { throw 'Edolterm 설치 프로그램에서 Windows 연동을 먼저 설치하세요.' }
+    if (-not $package) { throw 'Windows 연동 등록이 없습니다. Edolterm 설치 프로그램을 다시 실행하세요.' }
     $manifest = Get-AppxPackageManifest -Package $package.PackageFullName
     if (-not ($manifest.OuterXml -match 'F36B1E31-6A3A-4BD1-92E5-801C26933378') -or
         -not ($manifest.OuterXml -match '93C0413C-F8D7-49D7-8C07-62E4D1039ED4') -or
