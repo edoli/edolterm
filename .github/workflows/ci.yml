@@ -13,7 +13,8 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build:
-    runs-on: windows-latest
+    # OpenConsole builds with the VS 2022 v143 toolset.
+    runs-on: windows-2022
     env:
       EDOLTERM_RELEASE_REPOSITORY: ${{ github.repository }}
     steps:
