@@ -26,6 +26,7 @@ jobs:
         with:
           cache-directories: |
             target/conpty-comparison
+            target/openconsole-source
             target/tools/InnoSetup
       - name: Validate Cargo and tag versions
         run: python scripts/release-metadata.py version
@@ -37,6 +38,8 @@ jobs:
           "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
       - name: Rust tests
         run: cargo test --locked
+      - name: Windows integration version checks
+        run: ./scripts/test-windows-terminal-support.ps1
       - name: Prepare Inno Setup
         run: ./scripts/install-inno.ps1
       - name: Build and sign packages
