@@ -147,7 +147,11 @@ pub(super) fn open_default(cx: &mut App) -> anyhow::Result<Entity<TerminalApp>> 
     open(Startup::Default, geometry, None, cx)
 }
 
-pub(super) fn route(request: &Request, cx: &mut App) -> Result<(), String> {
+pub(super) fn route(
+    request: &Request,
+    #[cfg(windows)] incoming: Option<crate::handoff::Incoming>,
+    cx: &mut App,
+) -> Result<(), String> {
     if let Some((_, reply)) = cx
         .global::<Windows>()
         .recent_requests
@@ -156,6 +160,9 @@ pub(super) fn route(request: &Request, cx: &mut App) -> Result<(), String> {
     {
         return reply.clone();
     }
+    #[cfg(windows)]
+    let result = route_inner(request, incoming, cx);
+    #[cfg(not(windows))]
     let result = route_inner(request, cx);
     let registry = cx.global_mut::<Windows>();
     registry
@@ -166,8 +173,16 @@ pub(super) fn route(request: &Request, cx: &mut App) -> Result<(), String> {
     }
     result
 }
-fn route_inner(request: &Request, cx: &mut App) -> Result<(), String> {
+fn route_inner(
+    request: &Request,
+    #[cfg(windows)] incoming: Option<crate::handoff::Incoming>,
+    cx: &mut App,
+) -> Result<(), String> {
     request.validate()?;
+    #[cfg(windows)]
+    if request.handoff.is_some() != incoming.is_some() {
+        return Err("콘솔 연결 핸들을 전달받지 못했습니다.".into());
+    }
     if cx.global::<Windows>().preserve_session {
         return Err("Edolterm을 다시 시작하고 있습니다. 잠시 후 다시 시도하세요.".into());
     }
@@ -207,6 +222,13 @@ fn route_inner(request: &Request, cx: &mut App) -> Result<(), String> {
         entry
             .handle
             .update(cx, |root, window, cx| {
+                #[cfg(windows)]
+                if let Some(incoming) = incoming {
+                    root.add_handoff(incoming, window, cx);
+                    restore(entry.hwnd);
+                    window.activate_window();
+                    return;
+                }
                 root.add_terminal(
                     profile.unwrap_or_else(|| root.default_profile()),
                     directory,
@@ -225,6 +247,8 @@ fn route_inner(request: &Request, cx: &mut App) -> Result<(), String> {
             profile,
             directory: request.directory.clone(),
         };
+        #[cfg(windows)]
+        let startup = incoming.map(Startup::Handoff).unwrap_or(startup);
         open(startup, geometry, None, cx).map_err(|error| error.to_string())?;
     }
     Ok(())

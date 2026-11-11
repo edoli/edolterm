@@ -1,0 +1,4 @@
+LIBRARY "Edolterm.TerminalHost.dll"
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

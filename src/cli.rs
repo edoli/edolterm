@@ -6,6 +6,8 @@ pub struct Options {
     pub working_directory: Option<PathBuf>,
     pub profile: Option<String>,
     pub new_window: bool,
+    #[cfg(windows)]
+    pub handoff: Option<crate::handoff::Incoming>,
     #[cfg(debug_assertions)]
     pub smoke_mode: Option<String>,
 }
@@ -15,6 +17,29 @@ impl Options {
         let mut options = Self::default();
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
+            #[cfg(windows)]
+            if let Some(value) = arg
+                .to_str()
+                .and_then(|s| s.strip_prefix("--terminal-handoff="))
+            {
+                if options.handoff.is_some() {
+                    bail!("콘솔 연결은 한 번만 지정할 수 있습니다.");
+                }
+                options.handoff = Some(crate::handoff::Incoming::inherit(value)?);
+                continue;
+            }
+            #[cfg(windows)]
+            if let Some(title) = arg
+                .to_str()
+                .and_then(|s| s.strip_prefix("--handoff-title="))
+            {
+                options
+                    .handoff
+                    .as_mut()
+                    .context("콘솔 연결 없이 제목을 지정할 수 없습니다.")?
+                    .title = title.into();
+                continue;
+            }
             if arg == "--new-window" {
                 options.new_window = true;
                 continue;
@@ -68,6 +93,12 @@ impl Options {
                 bail!("시작 폴더를 찾을 수 없습니다: {}", path.display());
             }
             options.working_directory = Some(path);
+        }
+        #[cfg(windows)]
+        if options.handoff.is_some()
+            && (options.profile.is_some() || options.working_directory.is_some())
+        {
+            bail!("전달된 콘솔에는 프로필이나 시작 폴더를 지정할 수 없습니다.");
         }
         Ok(options)
     }

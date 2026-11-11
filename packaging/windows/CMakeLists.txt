@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
-project(EdoltermExplorer LANGUAGES CXX)
+project(EdoltermExplorer LANGUAGES C CXX)
+include(HandoffProxy.cmake)
 add_library(EdoltermExplorer SHARED ExplorerCommand.cpp ExplorerCommand.def)
 set_target_properties(EdoltermExplorer PROPERTIES OUTPUT_NAME "Edolterm.ExplorerCommand"
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -11,6 +12,12 @@ set_target_properties(EdoltermExplorerHost PROPERTIES OUTPUT_NAME "Edolterm.Expl
     MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 target_compile_features(EdoltermExplorerHost PRIVATE cxx_std_17)
 target_compile_options(EdoltermExplorerHost PRIVATE /W4 /WX /utf-8 /EHsc)
+add_library(EdoltermTerminalHost SHARED TerminalHost.cpp TerminalHost.def)
+set_target_properties(EdoltermTerminalHost PROPERTIES OUTPUT_NAME "Edolterm.TerminalHost"
+    MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+target_compile_features(EdoltermTerminalHost PRIVATE cxx_std_17)
+target_compile_options(EdoltermTerminalHost PRIVATE /W4 /WX /utf-8 /EHsc)
+target_link_libraries(EdoltermTerminalHost PRIVATE EdoltermHandoffInterfaces ole32 oleaut32 uuid)
 option(BUILD_TESTING "Build optional Explorer integration tests" OFF)
 include(CTest)
 if(BUILD_TESTING)

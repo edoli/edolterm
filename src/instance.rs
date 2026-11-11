@@ -16,6 +16,9 @@ pub struct Request {
     #[serde(default)]
     pub profile: Option<String>,
     pub new_window: bool,
+    #[cfg(windows)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<crate::handoff::Descriptor>,
 }
 
 impl Request {
@@ -28,13 +31,28 @@ impl Request {
             directory,
             profile: None,
             new_window,
+            #[cfg(windows)]
+            handoff: None,
         })
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.version != 1
-            || self.id.len() != 32
-            || !self.id.bytes().all(|b| b.is_ascii_hexdigit())
+        #[cfg(windows)]
+        if let Some(handoff) = &self.handoff {
+            handoff.validate().map_err(|error| error.to_string())?;
+            if self.profile.is_some() || self.directory.is_some() {
+                return Err("전달된 콘솔에는 프로필이나 시작 폴더를 지정할 수 없습니다.".into());
+            }
+        }
+        #[cfg(windows)]
+        let valid_version = if self.handoff.is_some() {
+            self.version == 2
+        } else {
+            self.version == 1
+        };
+        #[cfg(not(windows))]
+        let valid_version = self.version == 1;
+        if !valid_version || self.id.len() != 32 || !self.id.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return Err("호환되지 않는 Edolterm 실행 요청입니다.".into());
         }
@@ -54,6 +72,8 @@ impl Request {
 
 pub struct Envelope {
     pub request: Request,
+    #[cfg(windows)]
+    pub handoff: Option<crate::handoff::Incoming>,
     pub reply: std::sync::mpsc::SyncSender<Result<(), String>>,
 }
 

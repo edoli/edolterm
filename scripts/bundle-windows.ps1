@@ -34,6 +34,8 @@ Copy-BundleFile (Join-Path $packageDir 'runtimes/win-x64/native/conpty.dll') (Jo
 Copy-BundleFile (Join-Path $packageDir 'build/native/runtimes/x64/OpenConsole.exe') (Join-Path $destination 'OpenConsole.exe')
 Copy-BundleFile (Join-Path $PSScriptRoot 'explorer-context-menu.ps1') (Join-Path $destination 'explorer-context-menu.ps1')
 Invoke-WebRequest 'https://raw.githubusercontent.com/microsoft/terminal/v1.25.2733.0/LICENSE' -OutFile (Join-Path $destination 'LICENSE-ConPTY.txt')
+[IO.File]::AppendAllText((Join-Path $destination 'LICENSE-ConPTY.txt'), "`r`n--- Alacritty pipe adapter (Apache-2.0) ---`r`n" +
+    [IO.File]::ReadAllText((Join-Path $projectDir 'src/handoff/LICENSE-Alacritty')))
 $manifest = [ordered]@{
     package = 'Microsoft.Windows.Console.ConPTY'
     version = $packageVersion

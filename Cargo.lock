@@ -1380,6 +1380,7 @@ dependencies = [
  "gpui_platform",
  "ico",
  "image",
+ "piper",
  "polling",
  "raw-window-handle",
  "resvg",

@@ -39,7 +39,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 ; Preserve the previous selection during silent updates so removed integration is reinstalled.
-Name: "explorer"; Description: "탐색기 우클릭 메뉴에 Edolterm에서 열기 추가 (Windows 11은 인증서 등록에 관리자 승인 필요)"
+Name: "explorer"; Description: "탐색기 메뉴 및 Windows 기본 터미널 연동 설치 (인증서 등록 시 관리자 승인 필요)"
 Name: "desktopicon"; Description: "바탕 화면 바로 가기 만들기"; Flags: unchecked
 
 [Files]
@@ -51,6 +51,14 @@ Source: "{#PayloadDir}\OpenConsole.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\LICENSE-ConPTY.txt"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PayloadDir}\shell-integration\Edolterm.ExplorerCommand.dll"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
 Source: "{#PayloadDir}\shell-integration\Edolterm.ExplorerHost.exe"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.TerminalHost.dll"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.OpenConsole.exe"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\openconsole-build.json"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\Edolterm.HandoffProxy.dll"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\LICENSE-MicrosoftTerminal.txt"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\NOTICE-OpenConsole.txt"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\windows-default-terminal.ps1"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
+Source: "{#PayloadDir}\shell-integration\windows-terminal-support.ps1"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
 Source: "{#PayloadDir}\shell-integration\Edolterm.Explorer.msix"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
 Source: "{#PayloadDir}\shell-integration\Edolterm.Development.cer"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
 Source: "{#PayloadDir}\shell-integration\windows-shell-integration.ps1"; DestDir: "{app}\shell-integration"; Flags: ignoreversion
@@ -81,7 +89,7 @@ function CreateFileW(lpFileName: String; dwDesiredAccess, dwShareMode, lpSecurit
 function CloseHandle(hObject: THandle): Boolean;
   external 'CloseHandle@kernel32.dll stdcall';
 
-function RunShellIntegration(Action: String): Boolean;
+function RunShellIntegration(Action: String; PreserveDefault: Boolean): Boolean;
 var
   ExitCode: Integer;
   Parameters, Scope, IntegrationDirectory: String;
@@ -94,6 +102,9 @@ begin
   Parameters := '-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File ' +
     AddQuotes(IntegrationDirectory + '\windows-shell-integration.ps1') +
     ' -Action ' + Action + ' -AppDirectory ' + AddQuotes(IntegrationDirectory) + ' -Scope ' + Scope;
+  { Older integration helpers predate this option and cannot accept it. }
+  if PreserveDefault and FileExists(IntegrationDirectory + '\windows-default-terminal.ps1') then
+    Parameters := Parameters + ' -PreserveDefaultTerminal';
   Result := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
     Parameters, '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
   Log('Explorer integration ' + Action + ': launched=' + IntToStr(Ord(Result)) + ', exit=' + IntToStr(ExitCode));
@@ -124,7 +135,7 @@ begin
   if FileExists(ExpandConstant('{app}\explorer-integration.enabled')) or
     (FileExists(ExpandConstant('{app}\windows-shell-integration.ps1')) and
      not FileExists(ExpandConstant('{app}\explorer-context-menu.ps1'))) then
-    if not RunShellIntegration('Uninstall') then
+    if not RunShellIntegration('Uninstall', WizardIsTaskSelected('explorer')) then
       Result := '기존 탐색기 메뉴 등록을 해제하지 못했습니다. Edolterm을 종료한 뒤 다시 시도하세요.';
   if Result = '' then DeleteFile(ExpandConstant('{app}\explorer-integration.enabled'));
 end;
@@ -134,7 +145,7 @@ begin
   if (CurStep = ssPostInstall) and WizardIsTaskSelected('explorer') then
   begin
     SaveStringToFile(ExpandConstant('{app}\explorer-integration.enabled'), 'enabled', False);
-    if not RunShellIntegration('Install') then
+    if not RunShellIntegration('Install', False) then
     begin
       IntegrationFailed := True;
       SuppressibleMsgBox('Edolterm 메뉴 등록에 실패했습니다. 인증서 등록의 관리자 승인을 허용했는지 확인하세요.' + #13#10 +
@@ -157,7 +168,7 @@ begin
     Exit;
   end;
   if FileExists(ExpandConstant('{app}\explorer-integration.enabled')) then
-    if not RunShellIntegration('Uninstall') then
+    if not RunShellIntegration('Uninstall', False) then
     begin
       MsgBox('탐색기 메뉴 등록을 해제하지 못했습니다. 실행 중인 Edolterm을 종료한 뒤 다시 시도하세요.', mbError, MB_OK);
       Result := False;

@@ -2,17 +2,21 @@
     [ValidateSet('Install', 'Uninstall', 'TrustCertificate', 'RemoveCertificate')]
     [string]$Action = 'Install',
     [string]$AppDirectory = $PSScriptRoot,
-    [ValidateSet('User', 'Machine')][string]$Scope = 'User'
+    [ValidateSet('User', 'Machine')][string]$Scope = 'User',
+    [switch]$PreserveDefaultTerminal
 )
 $ErrorActionPreference = 'Stop'
 # Inno can inherit PowerShell 7's PSModulePath from its launching process.
 # Load Windows PowerShell's system modules rather than incompatible Core modules.
 if ($PSEdition -eq 'Core') {
     $windowsPowerShell = Join-Path $env:SystemRoot 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -Action $Action -AppDirectory $AppDirectory -Scope $Scope
+    $extra = @()
+    if ($PreserveDefaultTerminal) { $extra += '-PreserveDefaultTerminal' }
+    & $windowsPowerShell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PSCommandPath -Action $Action -AppDirectory $AppDirectory -Scope $Scope @extra
     exit $LASTEXITCODE
 }
 $env:PSModulePath = Join-Path $PSHOME 'Modules'
+. (Join-Path $PSScriptRoot 'windows-terminal-support.ps1')
 $AppDirectory = (Get-Item -LiteralPath $AppDirectory).FullName
 $terminalDirectory = if ((Split-Path -Leaf $AppDirectory) -eq 'shell-integration') { Split-Path -Parent $AppDirectory } else { $AppDirectory }
 $logDirectory = Join-Path $env:LOCALAPPDATA 'Edolterm/Logs'
@@ -53,8 +57,13 @@ if ($Action -eq 'TrustCertificate' -or $Action -eq 'RemoveCertificate') {
     exit 0
 }
 $legacyScript = Join-Path $terminalDirectory 'explorer-context-menu.ps1'
+$defaultHelper = Join-Path $AppDirectory 'windows-default-terminal.ps1'
 if ($Action -eq 'Uninstall') {
-    if ([Environment]::OSVersion.Version.Build -ge 22000) {
+    if (-not $PreserveDefaultTerminal -and (Test-Path -LiteralPath $defaultHelper)) {
+        & $defaultHelper -Action Restore
+    }
+    # Remove any registered sparse package, including after an OS update rollback.
+    if ([Environment]::OSVersion.Version.Build -ge 19041) {
         if ($Scope -eq 'Machine') {
             if (-not (Is-Administrator)) { throw 'All-users menu removal requires administrator approval.' }
             Get-AppxProvisionedPackage -Online | Where-Object DisplayName -eq $packageName |
@@ -67,8 +76,10 @@ if ($Action -eq 'Uninstall') {
     if (Test-Path -LiteralPath $legacyScript) { & $legacyScript -Action Uninstall -Scope $Scope }
     exit 0
 }
-if ([Environment]::OSVersion.Version.Build -lt 22000) {
-    # ConPTY supports Windows 10 1809; sparse identity is neither needed nor installed here.
+if (-not (Test-EdoltermDefaultTerminalSupport (Get-EdoltermWindowsVersion))) {
+    # Older Windows 10 builds keep their registry menu and ordinary ConPTY tabs.
+    # An OS update rollback must not retain a default pointing to an absent package.
+    if (Test-Path -LiteralPath $defaultHelper) { & $defaultHelper -Action Restore }
     & $legacyScript -Action Install -Scope $Scope -ExecutablePath (Join-Path $terminalDirectory 'edolterm.exe')
     exit 0
 }
@@ -95,5 +106,5 @@ if ($Scope -eq 'Machine') {
 }
 # Remove our legacy verbs only after the new command is successfully registered.
 & $legacyScript -Action Uninstall -Scope $Scope
-Write-Output 'Registered Edolterm in the Windows 11 Explorer menu for the current user.'
+Write-Output 'Registered Edolterm Explorer and default-terminal integration for the current user.'
 Stop-Transcript | Out-Null

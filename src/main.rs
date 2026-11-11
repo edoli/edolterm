@@ -2,6 +2,8 @@
 mod app;
 mod cli;
 mod config;
+#[cfg(windows)]
+mod handoff;
 mod icons;
 mod instance;
 mod keys;

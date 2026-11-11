@@ -32,6 +32,8 @@ struct Tab {
 }
 
 enum Startup {
+    #[cfg(windows)]
+    Handoff(crate::handoff::Incoming),
     Restore(SavedSession),
     Launch {
         profile: Option<Profile>,
@@ -201,6 +203,14 @@ impl TerminalApp {
             last_bounds: window.window_bounds(),
             retiring_sessions: Vec::new(),
         };
+        #[cfg(windows)]
+        let startup = match startup {
+            Startup::Handoff(incoming) => {
+                this.add_handoff(incoming, window, cx);
+                Startup::Default
+            }
+            startup => startup,
+        };
         if let Startup::Launch { profile, directory } = startup {
             this.add_terminal(
                 profile.unwrap_or_else(|| this.default_profile()),
@@ -310,6 +320,43 @@ impl TerminalApp {
             _subscription: Some(subscription),
         });
         self.menu = false;
+    }
+
+    #[cfg(windows)]
+    fn add_handoff(
+        &mut self,
+        incoming: crate::handoff::Incoming,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let profile = incoming
+            .program()
+            .map(|program| {
+                let name = PathBuf::from(&program)
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let mut profile = self
+                    .profiles
+                    .iter()
+                    .find(|profile| {
+                        PathBuf::from(profile.program.trim_matches('"'))
+                            .file_stem()
+                            .is_some_and(|stem| stem.to_string_lossy().eq_ignore_ascii_case(&name))
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        Profile::new(&format!("external:{name}"), &name, &program, &[])
+                    });
+                profile.program = program;
+                profile
+            })
+            .unwrap_or_else(|| self.default_profile());
+        self.create_terminal(profile, None, window, cx);
+        let terminal = self.tabs.last().unwrap().terminal.as_ref().unwrap().clone();
+        terminal.update(cx, |view, _| view.receive_handoff(incoming));
+        self.activate(self.tabs.len() - 1, window, cx);
     }
     fn activate(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         if index >= self.tabs.len() {
@@ -1503,6 +1550,13 @@ pub fn run(launch_options: crate::cli::Options) {
             )
             .and_then(|mut request| {
                 request.profile = launch_options.profile.clone();
+                request.handoff = launch_options
+                    .handoff
+                    .as_ref()
+                    .map(crate::handoff::Incoming::descriptor);
+                if request.handoff.is_some() {
+                    request.version = 2;
+                }
                 crate::instance::start(&dir, request)
             });
             match result {
@@ -1580,8 +1634,14 @@ pub fn run(launch_options: crate::cli::Options) {
                 cx.global_mut::<windows::Windows>()._host = host;
                 if let Some(requests) = requests {
                     cx.spawn(async move |cx| {
-                        while let Ok(envelope) = requests.recv().await {
-                            let result = cx.update(|cx| windows::route(&envelope.request, cx));
+                        while let Ok(mut envelope) = requests.recv().await {
+                            let result = cx.update(|cx| {
+                                windows::route(
+                                    &envelope.request,
+                                    envelope.handoff.take(),
+                                    cx,
+                                )
+                            });
                             let _ = envelope.reply.send(result);
                         }
                     })
@@ -1597,7 +1657,14 @@ pub fn run(launch_options: crate::cli::Options) {
                 }
             })
             .detach();
-            let initial_windows = if launch_options.working_directory.is_none()
+            #[cfg(windows)]
+            let mut incoming = launch_options.handoff;
+            #[cfg(windows)]
+            let external = incoming.is_some();
+            #[cfg(not(windows))]
+            let external = false;
+            let initial_windows = if !external
+                && launch_options.working_directory.is_none()
                 && launch_profile.is_none()
                 && settings.restore_session
                 && !saved.windows.is_empty()
@@ -1618,6 +1685,8 @@ pub fn run(launch_options: crate::cli::Options) {
                     } else {
                         Startup::Restore(geometry.clone())
                     };
+                #[cfg(windows)]
+                let startup = incoming.take().map(Startup::Handoff).unwrap_or(startup);
                 match windows::open(startup, geometry, error.clone(), cx) {
                     Ok(root) => {
                         if first.is_none() {

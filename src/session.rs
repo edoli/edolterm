@@ -182,6 +182,50 @@ impl Session {
         let pty = tty::new(&options, size.into(), window_id);
         let pty =
             pty.with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
+        Self::connect(pty, terminal, proxy, pending, size, cwd, rx)
+    }
+
+    #[cfg(windows)]
+    pub fn attach(
+        incoming: crate::handoff::Incoming,
+        settings: &Settings,
+    ) -> Result<(Self, async_channel::Receiver<Event>)> {
+        let (tx, rx) = async_channel::unbounded();
+        let pending = Arc::new(AtomicBool::new(false));
+        let proxy = EventProxy {
+            tx,
+            pending: pending.clone(),
+        };
+        let size = GridSize::default();
+        let terminal = Arc::new(FairMutex::new(Term::new(
+            term_config(settings),
+            &size,
+            proxy.clone(),
+        )));
+        let mut pty = crate::handoff::Pty::new(incoming)?;
+        use alacritty_terminal::event::OnResize;
+        pty.on_resize(size.into());
+        Self::connect(
+            windows_pty::LevelTriggeredPty::wrap(pty),
+            terminal,
+            proxy,
+            pending,
+            size,
+            crate::platform::home_dir(),
+            rx,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn connect<T: tty::EventedPty + alacritty_terminal::event::OnResize + Send + 'static>(
+        pty: T,
+        terminal: Arc<FairMutex<Terminal>>,
+        proxy: EventProxy,
+        pending: Arc<AtomicBool>,
+        size: GridSize,
+        cwd: PathBuf,
+        rx: async_channel::Receiver<Event>,
+    ) -> Result<(Self, async_channel::Receiver<Event>)> {
         let cwd = working_directory::WorkingDirectory::new(cwd);
         let input_modes = input_modes::InputModes::default();
         let pty = working_directory::TrackedPty::new(pty, cwd.clone(), input_modes.clone());

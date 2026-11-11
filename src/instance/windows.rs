@@ -361,8 +361,27 @@ pub fn start(dir: &Path, request: Request) -> Result<Outcome> {
                                 return Ok(());
                             }
                             let (reply, result) = mpsc::sync_channel(1);
-                            tx.try_send(Envelope { request, reply })
-                                .map_err(|_| anyhow!("GUI host stopped"))?;
+                            // Only duplicate handles from the actual pipe client, never a PID
+                            // selected by the packet. The source retains ownership until reply.
+                            let handoff = request
+                                .handoff
+                                .as_ref()
+                                .map(|descriptor| {
+                                    let mut peer = 0;
+                                    if unsafe { GetNamedPipeClientProcessId(handle, &mut peer) }
+                                        == 0
+                                    {
+                                        return Err(io::Error::last_os_error().into());
+                                    }
+                                    crate::handoff::Incoming::duplicate(descriptor, peer)
+                                })
+                                .transpose()?;
+                            tx.try_send(Envelope {
+                                request,
+                                handoff,
+                                reply,
+                            })
+                            .map_err(|_| anyhow!("GUI host stopped"))?;
                             let began = Instant::now();
                             let response = loop {
                                 match result.recv_timeout(Duration::from_millis(50)) {

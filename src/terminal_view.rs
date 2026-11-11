@@ -70,6 +70,8 @@ pub struct TerminalView {
     grid_size: GridSize,
     startup: Option<startup::Pending>,
     startup_task: Option<Task<()>>,
+    #[cfg(windows)]
+    handoff: Option<crate::handoff::Incoming>,
     pending_input: Vec<PendingInput>,
     _receiver: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -162,6 +164,8 @@ impl TerminalView {
             grid_size: GridSize::default(),
             startup: None,
             startup_task: None,
+            #[cfg(windows)]
+            handoff: None,
             pending_input: Vec::new(),
             _receiver: None,
             _subscriptions: subscriptions,
@@ -188,6 +192,25 @@ impl TerminalView {
                 }
             }
         }
+        #[cfg(windows)]
+        let incoming = self.handoff.take();
+        #[cfg(windows)]
+        let startup = if let Some(incoming) = incoming {
+            let settings = self.settings.clone();
+            cx.global::<SessionStarts>().0.submit(
+                Box::new(move || Session::attach(incoming, &settings)),
+                selected,
+            )
+        } else {
+            cx.global::<SessionStarts>().0.start(
+                self.profile.clone(),
+                self.cwd.clone(),
+                self.settings.clone(),
+                self.window_id,
+                selected,
+            )
+        };
+        #[cfg(not(windows))]
         let startup = cx.global::<SessionStarts>().0.start(
             self.profile.clone(),
             self.cwd.clone(),
@@ -249,6 +272,17 @@ impl TerminalView {
                 cx.notify();
             });
         }));
+    }
+
+    #[cfg(windows)]
+    pub fn receive_handoff(&mut self, incoming: crate::handoff::Incoming) {
+        self.title = incoming
+            .title
+            .chars()
+            .filter(|ch| !ch.is_control())
+            .take(256)
+            .collect();
+        self.handoff = Some(incoming);
     }
 
     pub fn working_directory(&self) -> PathBuf {

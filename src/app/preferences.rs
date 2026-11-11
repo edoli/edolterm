@@ -279,6 +279,15 @@ impl TerminalApp {
             .child(self.update_view(theme, cx))
             .child(div().mb_1().text_size(px(25.)).font_weight(FontWeight::BOLD).child("설정"))
             .child(div().mb_4().text_color(theme.muted).child("설정은 저장하면 열린 터미널에도 적용됩니다."))
+            .when(cfg!(windows), |content| {
+                #[cfg(windows)]
+                { content.child(setting("Windows 기본 터미널", "새로 실행하는 콘솔을 Edolterm으로 엽니다. Windows 11 또는 업데이트된 Windows 10 22H2와 Windows 연동 설치가 필요합니다.", theme,
+                    div().flex().flex_wrap().gap_2()
+                        .child(settings_button("set-default-terminal", "기본 터미널로 설정", theme).on_click(cx.listener(|this, _, _, cx| this.change_default_terminal(false, cx))))
+                        .child(settings_button("restore-default-terminal", "이전 설정 복원", theme).on_click(cx.listener(|this, _, _, cx| this.change_default_terminal(true, cx)))))) }
+                #[cfg(not(windows))]
+                { content }
+            })
             .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸입니다.", theme, selector(&prefs.profile)))
             .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창입니다. 대상 창이 없으면 새 창을 만듭니다.", theme, selector(&prefs.behavior)))
             .child(setting("터미널 글꼴", "설치된 글꼴을 검색해 선택합니다. 터미널에는 고정폭 글꼴을 권장합니다.", theme, selector(&prefs.font)))
@@ -334,6 +343,29 @@ impl TerminalApp {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(windows)]
+impl TerminalApp {
+    fn change_default_terminal(&mut self, restore: bool, cx: &mut Context<Self>) {
+        self.status = Some("기본 터미널 설정을 변경하고 있습니다…".into());
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::handoff::change_default(restore) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.status = Some(match result {
+                    Ok(message) if !message.is_empty() => message,
+                    Ok(_) => "기본 터미널 설정을 확인했습니다.".into(),
+                    Err(error) => format!("{error:#}"),
+                });
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
     }
 }
 

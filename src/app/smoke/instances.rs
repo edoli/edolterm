@@ -153,9 +153,9 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
     ensure!(tabs(&first, cx) == 4, "current desktop MRU failed");
     // Re-delivery of a request cannot create duplicate tabs.
     let request = crate::instance::Request::new(Some(cwd), false)?;
-    cx.update(|cx| windows::route(&request, cx))
+    cx.update(|cx| windows::route(&request, None, cx))
         .map_err(anyhow::Error::msg)?;
-    cx.update(|cx| windows::route(&request, cx))
+    cx.update(|cx| windows::route(&request, None, cx))
         .map_err(anyhow::Error::msg)?;
     ensure!(tabs(&first, cx) == 5, "duplicate request was applied twice");
     first.handle.update(cx, |app, window, cx| {
@@ -345,7 +345,7 @@ async fn profile_launches(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
     let mut stale = crate::instance::Request::new(None, false)?;
     stale.profile = Some("__removed_profile__".into());
     ensure!(
-        cx.update(|cx| windows::route(&stale, cx)).is_err(),
+        cx.update(|cx| windows::route(&stale, None, cx)).is_err(),
         "stale profile silently used default"
     );
     ensure!(

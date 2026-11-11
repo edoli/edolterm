@@ -57,7 +57,11 @@ impl Launcher {
         )
     }
 
-    fn submit(&self, work: Box<dyn FnOnce() -> Started + Send>, selected: bool) -> Pending {
+    pub(crate) fn submit(
+        &self,
+        work: Box<dyn FnOnce() -> Started + Send>,
+        selected: bool,
+    ) -> Pending {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let cancelled = Arc::new(AtomicBool::new(false));
         let (result, receiver) = async_channel::bounded(1);

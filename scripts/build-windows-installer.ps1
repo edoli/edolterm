@@ -34,11 +34,18 @@ if (-not $SkipAppBuild) {
     finally { Pop-Location }
 }
 & (Join-Path $PSScriptRoot 'bundle-windows.ps1') -OutputDir $OutputDir\payload -Profile $Profile
+& (Join-Path $PSScriptRoot 'build-openconsole.ps1') -OutputDirectory (Join-Path $OutputDir 'payload/shell-integration')
 Invoke-Native 'cmake' @('-S', $source, '-B', (Join-Path $work 'native'), '-A', 'x64', '-DBUILD_TESTING=OFF')
 Invoke-Native 'cmake' @('--build', (Join-Path $work 'native'), '--config', 'Release')
 Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.ExplorerCommand.dll') -Destination $shellPayload -Force
 Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.ExplorerHost.exe') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.TerminalHost.dll') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $work 'native/Release/Edolterm.HandoffProxy.dll') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $source 'LICENSE-MicrosoftTerminal.txt') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $source 'NOTICE-OpenConsole.txt') -Destination $shellPayload -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-shell-integration.ps1') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-default-terminal.ps1') -Destination $shellPayload -Force
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'windows-terminal-support.ps1') -Destination $shellPayload -Force
 
 $sdkRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/bin'
 $sdk = Get-ChildItem -LiteralPath $sdkRoot -Directory |
@@ -88,7 +95,10 @@ if ($nativeManifest.GetElementsByTagName('msix', 'urn:schemas-microsoft-com:msix
 }
 $shellHost = Join-Path $shellPayload 'Edolterm.ExplorerHost.exe'
 Invoke-Native (Join-Path $sdkBin 'mt.exe') @('-nologo', "-inputresource:$shellHost;#1", '-manifest', (Join-Path $source 'Identity.manifest'), "-outputresource:$shellHost;#1")
-foreach ($file in @($app, $shellHost, (Join-Path $shellPayload 'Edolterm.ExplorerCommand.dll'))) {
+$consoleHost = Join-Path $shellPayload 'Edolterm.OpenConsole.exe'
+Invoke-Native (Join-Path $sdkBin 'mt.exe') @('-nologo', "-inputresource:$consoleHost;#1", '-manifest', (Join-Path $source 'Identity.manifest'), "-outputresource:$consoleHost;#1")
+$terminalHost = Join-Path $shellPayload 'Edolterm.TerminalHost.dll'
+foreach ($file in @($app, $shellHost, $consoleHost, $terminalHost, (Join-Path $shellPayload 'Edolterm.HandoffProxy.dll'), (Join-Path $shellPayload 'Edolterm.ExplorerCommand.dll'))) {
     Invoke-Native (Join-Path $sdkBin 'signtool.exe') @('sign', '/fd', 'SHA256', '/s', 'My', '/sha1', $certificate.Thumbprint, $file)
 }
 
