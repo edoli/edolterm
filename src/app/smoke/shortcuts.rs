@@ -199,7 +199,7 @@ fn exercise(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Re
 
     press("ctrl-,", window, cx)?;
     root.update(cx, |app, cx| {
-        app.settings_page = super::super::shortcuts::SettingsPage::Shortcuts;
+        app.settings_page = super::super::preferences::SettingsPage::Shortcuts;
         app.start_shortcut_capture("newTab", Some(0), window, cx);
     });
     press("ctrl-shift-n", window, cx)?;

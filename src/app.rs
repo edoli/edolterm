@@ -23,7 +23,7 @@ mod taskbar;
 mod updates;
 mod windows;
 use config::shortcuts::{self as keybindings, Bindings};
-use shortcuts::SettingsPage;
+use preferences::SettingsPage;
 use tab_menu::TabMenu;
 use tabs::{TabDrag, TabMotion, TabRename};
 

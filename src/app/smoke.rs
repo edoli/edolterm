@@ -282,7 +282,7 @@ pub fn start(
                     "shortcuts" => {
                         app.hide_search(window, cx);
                         app.settings_tab(window, cx);
-                        app.settings_page = super::shortcuts::SettingsPage::Shortcuts;
+                        app.settings_page = super::preferences::SettingsPage::Shortcuts;
                     }
                     "confirm" => { app.hide_search(window, cx); app.should_close(window, cx); }
                     _ => app.hide_search(window, cx),

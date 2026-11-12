@@ -1,14 +1,7 @@
+//! Keyboard action dispatch, shortcut capture, and the shortcut settings page.
 use super::*;
 use alacritty_terminal::grid::Scroll;
 use keybindings::{Action, DEFINITIONS};
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum SettingsPage {
-    Behavior,
-    Appearance,
-    Profiles,
-    Shortcuts,
-}
 
 impl TerminalApp {
     pub(super) fn shortcut_label(&self, action: Action) -> String {
@@ -81,18 +74,7 @@ impl TerminalApp {
                 }
             }
             Action::Settings => self.settings_tab(window, cx),
-            Action::SettingsFile => {
-                let path = self.dir.join("settings.toml");
-                let result = if path.exists() {
-                    Ok(())
-                } else {
-                    self.settings.save(&self.dir)
-                }
-                .and_then(|_| platform::open_file(&path));
-                if let Err(error) = result {
-                    self.status = Some(error.to_string());
-                }
-            }
+            Action::SettingsFile => self.open_settings_file(cx),
             Action::Find => self.show_search(window, cx),
             Action::Fullscreen => window.toggle_fullscreen(),
             action => {
@@ -240,81 +222,7 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::from_setting(&self.settings.theme, cx);
-        let nav = div()
-            .w(px(168.))
-            .h_full()
-            .flex_shrink_0()
-            .p_3()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .border_r_1()
-            .border_color(theme.border)
-            .child(
-                div()
-                    .px_3()
-                    .py_2()
-                    .text_size(px(16.))
-                    .font_weight(FontWeight::BOLD)
-                    .child("설정"),
-            )
-            .children(
-                [
-                    (SettingsPage::Behavior, "동작"),
-                    (SettingsPage::Appearance, "모양"),
-                    (SettingsPage::Profiles, "프로필"),
-                    (SettingsPage::Shortcuts, "단축키"),
-                ]
-                .into_iter()
-                .enumerate()
-                .map(|(index, (page, label))| {
-                    button(("settings-page", index), label, theme)
-                        .when(
-                            page == SettingsPage::Behavior && self.has_update(cx),
-                            |button| {
-                                button
-                                    .aria_label("동작 · 업데이트 있음")
-                                    .child(update_dot(theme).ml_2())
-                            },
-                        )
-                        .justify_start()
-                        .px_3()
-                        .py_2()
-                        .bg(if self.settings_page == page {
-                            theme.hover
-                        } else {
-                            theme.bg
-                        })
-                        .aria_selected(self.settings_page == page)
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.settings_page = page;
-                            this.settings_scroll.set_offset(point(px(0.), px(0.)));
-                            this.settings_scroll_drag = None;
-                            this.shortcut_capture = None;
-                            cx.notify();
-                        }))
-                }),
-            );
-        let content = match self.settings_page {
-            SettingsPage::Behavior | SettingsPage::Appearance | SettingsPage::Profiles => {
-                self.preferences_view(cx)
-            }
-            SettingsPage::Shortcuts => self.shortcuts_view(cx),
-        };
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h_0()
-            .min_w_0()
-            .child(div().flex().flex_1().min_h_0().child(nav).child(content))
-            .child(self.settings_footer(theme, cx))
-            .into_any_element()
-    }
-
-    fn shortcuts_view(&self, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn shortcuts_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let mut rows = div().flex().flex_col().gap_1();
         let mut group = "";
