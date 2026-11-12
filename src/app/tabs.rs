@@ -20,15 +20,16 @@ impl Tab {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct TabDrag {
     pub id: u64,
     pub started: bool,
-    start: Point<Pixels>,
-    pointer: Point<Pixels>,
-    grab_offset: f32,
-    original_order: Vec<u64>,
-    original_scroll: Point<Pixels>,
-    last_frame: Instant,
+    pub(super) start: Point<Pixels>,
+    pub(super) pointer: Point<Pixels>,
+    pub(super) grab_offset: f32,
+    pub(super) original_order: Vec<u64>,
+    pub(super) original_scroll: Point<Pixels>,
+    pub(super) last_frame: Instant,
 }
 
 pub(super) struct TabMotion {
@@ -195,7 +196,7 @@ impl TerminalApp {
             .into_any_element()
     }
 
-    fn tab_inset() -> f32 {
+    pub(super) fn tab_inset() -> f32 {
         if cfg!(target_os = "macos") { 78. } else { 0. }
     }
 
@@ -247,7 +248,38 @@ impl TerminalApp {
             .map_or(0., |motion| motion.offset(Instant::now()))
     }
 
-    fn update_tab_drag(&mut self, window: &Window) {
+    #[cfg(windows)]
+    pub(super) fn tab_positions(&self, window: &Window) -> Vec<(u64, f32)> {
+        let (_, width, _) = self.tab_dimensions(window);
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(index, tab)| (tab.id, index as f32 * width + self.tab_slide_offset(tab.id)))
+            .collect()
+    }
+
+    #[cfg(windows)]
+    pub(super) fn animate_tab_relayout(&mut self, positions: Vec<(u64, f32)>, window: &Window) {
+        let (_, width, _) = self.tab_dimensions(window);
+        let now = Instant::now();
+        self.tab_motions = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, tab)| self.tab_drag.as_ref().is_none_or(|drag| drag.id != tab.id))
+            .filter_map(|(index, tab)| {
+                let old = positions.iter().find(|(id, _)| *id == tab.id)?.1;
+                let offset = old - index as f32 * width;
+                (offset.abs() > 0.5).then_some(TabMotion {
+                    id: tab.id,
+                    offset,
+                    started: now,
+                })
+            })
+            .collect();
+    }
+
+    pub(super) fn update_tab_drag(&mut self, window: &Window) {
         let Some(drag) = self.tab_drag.as_ref().filter(|drag| drag.started) else {
             return;
         };
@@ -301,6 +333,11 @@ impl TerminalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        if tab_transfer::active(cx) {
+            cx.stop_propagation();
+            return;
+        }
         if !event.dragging() {
             self.finish_tab_drag(false, window, cx);
             return;
@@ -310,7 +347,11 @@ impl TerminalApp {
         };
         drag.pointer = event.position;
         if !drag.started {
-            if f32::from(event.position.x - drag.start.x).abs() < DRAG_THRESHOLD {
+            if f32::from(event.position.x - drag.start.x)
+                .abs()
+                .max(f32::from(event.position.y - drag.start.y).abs())
+                < DRAG_THRESHOLD
+            {
                 return;
             }
             drag.started = true;
@@ -318,6 +359,8 @@ impl TerminalApp {
             self.tab_motions.retain(|motion| motion.id != drag.id);
         }
         self.update_tab_drag(window);
+        #[cfg(windows)]
+        tab_transfer::begin_native(self, window, cx);
         cx.stop_propagation();
         cx.notify();
     }
@@ -363,6 +406,12 @@ impl TerminalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        #[cfg(windows)]
+        if tab_transfer::active(cx) {
+            tab_transfer::request_finish(cancel, cx);
+            cx.stop_propagation();
+            return;
+        }
         let left = self.dragged_tab_left(window) - f32::from(self.tab_scroll.offset().x);
         let Some(drag) = self.tab_drag.take() else {
             return;
@@ -395,6 +444,27 @@ impl TerminalApp {
             cx.stop_propagation();
         }
         cx.notify();
+    }
+
+    #[cfg(windows)]
+    pub(super) fn settle_transferred_tab(&mut self, window: &Window) {
+        let left = self.dragged_tab_left(window) - f32::from(self.tab_scroll.offset().x);
+        let Some(drag) = self.tab_drag.take() else {
+            return;
+        };
+        let Some(index) = self.tabs.iter().position(|tab| tab.id == drag.id) else {
+            return;
+        };
+        let (_, width, _) = self.tab_dimensions(window);
+        let offset = left - index as f32 * width;
+        self.tab_motions.retain(|motion| motion.id != drag.id);
+        if offset.abs() > 0.5 {
+            self.tab_motions.push(TabMotion {
+                id: drag.id,
+                offset,
+                started: Instant::now(),
+            });
+        }
     }
 
     pub(super) fn tab_element(

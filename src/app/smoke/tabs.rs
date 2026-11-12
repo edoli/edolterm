@@ -513,3 +513,418 @@ fn assert_window_title(window: &Window, expected: &str) -> anyhow::Result<()> {
     let _ = (window, expected);
     Ok(())
 }
+
+/// Drive the production screen-coordinate path without injecting OS input.
+#[cfg(windows)]
+pub(super) async fn transfer(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> anyhow::Result<()> {
+    use std::sync::Arc;
+    use windows_sys::Win32::{Foundation::POINT, Graphics::Gdi::ClientToScreen};
+
+    fn screen(entry: &windows::Entry, x: f32, y: f32, cx: &mut AsyncApp) -> anyhow::Result<POINT> {
+        entry.handle.update(cx, |_, window, _| {
+            let scale = window.scale_factor();
+            let mut point = POINT {
+                x: (x * scale) as i32,
+                y: (y * scale) as i32,
+            };
+            anyhow::ensure!(
+                unsafe { ClientToScreen(entry.hwnd() as _, &mut point) } != 0,
+                "client-to-screen conversion failed"
+            );
+            Ok(point)
+        })?
+    }
+
+    fn begin(
+        entry: &windows::Entry,
+        index: usize,
+        cx: &mut AsyncApp,
+    ) -> anyhow::Result<tab_transfer::Drag> {
+        entry.handle.update(cx, |app, window, cx| {
+            app.tab_motions.clear();
+            app.tab_scroll.set_offset(point(px(0.), px(0.)));
+            let (_, width, _) = app.tab_dimensions(window);
+            let x = TerminalApp::tab_inset() + (index as f32 + 0.35) * width;
+            app.begin_tab_drag(
+                app.tabs[index].id,
+                &MouseDownEvent {
+                    button: MouseButton::Left,
+                    position: point(px(x), px(18.)),
+                    click_count: 1,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            app.move_tab_drag(
+                &MouseMoveEvent {
+                    position: point(px(x + 8.), px(18.)),
+                    pressed_button: Some(MouseButton::Left),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            tab_transfer::begin_test(app, window, cx)
+        })
+    }
+
+    let origin = cx.update(|cx| {
+        cx.global::<windows::Windows>()
+            .entries
+            .iter()
+            .find(|entry| entry.id == handle.window_id().as_u64())
+            .unwrap()
+            .clone()
+    });
+    let (index, terminal, grid, old_title, old_color, original_order) =
+        root.read_with(cx, |app, cx| {
+            let (index, terminal) = app
+                .tabs
+                .iter()
+                .enumerate()
+                .filter_map(|(i, tab)| tab.terminal.as_ref().map(|terminal| (i, terminal)))
+                .find(|(_, terminal)| terminal.read(cx).session.is_some())
+                .unwrap();
+            let tab = &app.tabs[index];
+            (
+                index,
+                terminal.clone(),
+                terminal.read(cx).session.as_ref().unwrap().terminal.clone(),
+                tab.custom_title.clone(),
+                tab.color,
+                order(root, cx),
+            )
+        });
+    let original_id = original_order[index];
+    handle.update(cx, |_, window, cx| {
+        root.update(cx, |app, cx| {
+            app.tabs[index].custom_title = Some("창 사이 이동 🙂".into());
+            app.tabs[index].color = Some(0xe74856);
+            app.activate(index, window, cx);
+        });
+        terminal.read(cx).session.as_ref().unwrap().input(
+            b"$global:EdoltermTabDrag = 731942; [Console]::WriteLine(('DRAG_'+'BEFORE_MOVE'))\r"
+                .to_vec(),
+        );
+    })?;
+    let began = Instant::now();
+    while !terminal.read_with(cx, |terminal, _| {
+        terminal
+            .session
+            .as_ref()
+            .unwrap()
+            .plain_text()
+            .contains("DRAG_BEFORE_MOVE")
+    }) {
+        anyhow::ensure!(
+            began.elapsed() < Duration::from_secs(8),
+            "drag setup shell command timed out"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(40))
+            .await;
+    }
+
+    let mut drag = begin(&origin, index, cx)?;
+    let outside = screen(&origin, 100., 180., cx)?;
+    cx.update(|cx| drag.advance(outside, cx))?;
+    let detached = drag.current();
+    anyhow::ensure!(
+        detached.id != origin.id,
+        "vertical drag did not detach a window"
+    );
+    detached
+        .handle
+        .update(cx, |app, _, cx| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                app.tabs.len() == 1,
+                "detached window spawned an extra shell"
+            );
+            anyhow::ensure!(
+                app.tabs[0].terminal.as_ref() == Some(&terminal),
+                "detaching replaced TerminalView"
+            );
+            anyhow::ensure!(
+                Arc::ptr_eq(&grid, &terminal.read(cx).session.as_ref().unwrap().terminal),
+                "detaching replaced the PTY/grid"
+            );
+            anyhow::ensure!(
+                app.tabs[0].custom_title.as_deref() == Some("창 사이 이동 🙂")
+                    && app.tabs[0].color == Some(0xe74856),
+                "detach lost tab metadata"
+            );
+            Ok(())
+        })??;
+    cx.background_executor()
+        .timer(Duration::from_millis(180))
+        .await;
+    AnyWindowHandle::from(detached.handle).update(cx, |_, window, cx| {
+        draw(window, cx);
+        screenshot(root, "tabs-detached.png", window, cx)
+    })??;
+    anyhow::ensure!(
+        !root.read_with(cx, |app, _| app
+            .tabs
+            .iter()
+            .any(|tab| tab.terminal.as_ref() == Some(&terminal))),
+        "source retained moved terminal"
+    );
+
+    // Force a local ID collision and merge into a real second tab strip.
+    let target = cx.update(|cx| -> anyhow::Result<_> {
+        let geometry = root.read(cx).snapshot(root.read(cx).last_bounds, cx);
+        let target = windows::open(Startup::Empty, geometry, None, cx)?;
+        let entry = cx
+            .global::<windows::Windows>()
+            .entries
+            .iter()
+            .find(|entry| entry.root.upgrade().as_ref() == Some(&target))
+            .unwrap()
+            .clone();
+        entry.handle.update(cx, |app, window, cx| {
+            app.next_id = original_id;
+            app.add_terminal(
+                Profile::new(
+                    "drag-target",
+                    "Existing tab",
+                    "__edolterm_preview_missing_shell__",
+                    &[],
+                ),
+                None,
+                window,
+                cx,
+            );
+        })?;
+        Ok(entry)
+    })?;
+    let target_pointer = screen(&target, 80., 18., cx)?;
+    cx.update(|cx| drag.advance(target_pointer, cx))?;
+    anyhow::ensure!(
+        drag.current().id == target.id,
+        "hovering another strip did not merge"
+    );
+    target
+        .handle
+        .update(cx, |app, _, _| -> anyhow::Result<()> {
+            anyhow::ensure!(app.tabs.len() == 2, "merge lost an existing tab");
+            anyhow::ensure!(
+                app.tabs[0].id != app.tabs[1].id,
+                "window-local tab IDs collided"
+            );
+            anyhow::ensure!(
+                app.tabs[app.active].terminal.as_ref() == Some(&terminal),
+                "merge did not select the transferred terminal"
+            );
+            anyhow::ensure!(
+                !app.tab_motions.is_empty(),
+                "merge omitted neighbor slide animation"
+            );
+            Ok(())
+        })??;
+    target
+        .handle
+        .update(cx, |app, _, _| app.tabs[app.active].custom_title = None)?;
+    terminal.update(cx, |terminal, cx| {
+        terminal.title = "이동 후 자동 제목".into();
+        cx.emit(TerminalEvent::Metadata);
+    });
+    cx.background_executor()
+        .timer(Duration::from_millis(30))
+        .await;
+    target
+        .handle
+        .update(cx, |app, window, cx| -> anyhow::Result<()> {
+            assert_window_title(window, "이동 후 자동 제목 — edolterm")?;
+            app.tabs[app.active].custom_title = Some("창 사이 이동 🙂".into());
+            app.update_window_title(window, cx);
+            Ok(())
+        })??;
+    cx.background_executor()
+        .timer(Duration::from_millis(180))
+        .await;
+    AnyWindowHandle::from(target.handle).update(cx, |_, window, cx| {
+        draw(window, cx);
+        screenshot(root, "tabs-merged.png", window, cx)
+    })??;
+
+    // Leave the target again, reusing the detached window, then cancel across windows.
+    let outside = screen(&target, 100., 180., cx)?;
+    cx.update(|cx| drag.advance(outside, cx))?;
+    anyhow::ensure!(
+        drag.current().id == detached.id,
+        "re-detach did not reuse the floating window"
+    );
+    cx.update(|cx| tab_transfer::finish_test(drag, true, cx));
+    anyhow::ensure!(
+        root.read_with(cx, |_, cx| order(root, cx)) == original_order,
+        "Escape did not restore original IDs and order after a merge"
+    );
+
+    // Commit a detached window, then move its only tab back. Its empty source
+    // must close without killing the live session or showing a close prompt.
+    let mut drag = begin(&origin, index, cx)?;
+    let outside = screen(&origin, 100., 180., cx)?;
+    cx.update(|cx| drag.advance(outside, cx))?;
+    let single = drag.current();
+    cx.update(|cx| tab_transfer::finish_test(drag, false, cx));
+    cx.background_executor()
+        .timer(Duration::from_millis(80))
+        .await;
+    let saved = SavedSession::load(&root.read_with(cx, |app, _| app.dir.clone()))?;
+    anyhow::ensure!(
+        saved
+            .windows
+            .iter()
+            .filter(|window| window
+                .tabs
+                .iter()
+                .any(|tab| tab.custom_title.as_deref() == Some("창 사이 이동 🙂")))
+            .count()
+            == 1,
+        "committed detachment was not saved exactly once"
+    );
+    let mut drag = begin(&single, 0, cx)?;
+    origin
+        .handle
+        .update(cx, |_, window, _| window.activate_window())?;
+    let back = screen(&origin, 80., 18., cx)?;
+    cx.update(|cx| drag.advance(back, cx))?;
+    anyhow::ensure!(
+        drag.current().id == origin.id,
+        "single tab did not merge back"
+    );
+    cx.update(|cx| tab_transfer::finish_test(drag, false, cx));
+    cx.background_executor()
+        .timer(Duration::from_millis(80))
+        .await;
+    anyhow::ensure!(
+        !cx.update(|cx| cx
+            .global::<windows::Windows>()
+            .entries
+            .iter()
+            .any(|entry| entry.id == single.id)),
+        "last-tab transfer left an empty window"
+    );
+    anyhow::ensure!(
+        Arc::ptr_eq(
+            &grid,
+            &terminal.read_with(cx, |terminal, _| terminal
+                .session
+                .as_ref()
+                .unwrap()
+                .terminal
+                .clone())
+        ),
+        "round trip replaced the session"
+    );
+    terminal.update(cx, |terminal, cx| {
+        terminal.title = "이동 후 자동 제목".into();
+        cx.emit(TerminalEvent::Metadata);
+        terminal.session.as_ref().unwrap().input(
+            b"if ($global:EdoltermTabDrag -eq 731942) { [Console]::WriteLine(('DRAG_'+'SESSION_STILL_ALIVE')) }\r".to_vec());
+    });
+    let began = Instant::now();
+    while !terminal.read_with(cx, |terminal, _| {
+        terminal
+            .session
+            .as_ref()
+            .unwrap()
+            .plain_text()
+            .contains("DRAG_SESSION_STILL_ALIVE")
+    }) {
+        anyhow::ensure!(
+            began.elapsed() < Duration::from_secs(8),
+            "shell state/input lost after transfer"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(40))
+            .await;
+    }
+    origin
+        .handle
+        .update(cx, |app, window, cx| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                terminal.read(cx).focus.is_focused(window),
+                "transfer lost input focus"
+            );
+            assert_window_title(window, "창 사이 이동 🙂 — edolterm")?;
+            let tab = app
+                .tabs
+                .iter_mut()
+                .find(|tab| tab.terminal.as_ref() == Some(&terminal))
+                .unwrap();
+            tab.custom_title = old_title;
+            tab.color = old_color;
+            app.update_window_title(window, cx);
+            app.persist(window, cx);
+            Ok(())
+        })??;
+
+    // Settings are also movable; preserve even a partially edited numeric field.
+    let (had_settings, draft, page, preferences, settings_index) =
+        origin.handle.update(cx, |app, window, cx| {
+            let had_settings = app.tabs.iter().any(|tab| tab.id == 0);
+            let draft = app.draft.clone();
+            let page = app.settings_page;
+            let preferences = app.preferences.take();
+            app.settings_tab(window, cx);
+            app.ensure_preferences(window, cx);
+            app.preferences
+                .as_ref()
+                .unwrap()
+                .size
+                .read(cx)
+                .input
+                .clone()
+                .update(cx, |input, cx| input.set_text("17.", window, cx));
+            (had_settings, draft, page, preferences, app.active)
+        })?;
+    let mut drag = begin(&origin, settings_index, cx)?;
+    let outside = screen(&origin, 100., 180., cx)?;
+    cx.update(|cx| drag.advance(outside, cx))?;
+    drag.current()
+        .handle
+        .update(cx, |app, _, cx| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                app.tabs.len() == 1 && app.tabs[0].id == 0,
+                "settings detachment created a shell"
+            );
+            anyhow::ensure!(
+                app.preferences
+                    .as_ref()
+                    .unwrap()
+                    .size
+                    .read(cx)
+                    .input
+                    .read(cx)
+                    .text
+                    == "17.",
+                "settings transfer discarded the unsaved numeric input"
+            );
+            Ok(())
+        })??;
+    cx.update(|cx| tab_transfer::finish_test(drag, true, cx));
+    origin.handle.update(cx, |app, window, cx| {
+        app.draft = draft;
+        app.settings_page = page;
+        app.preferences = preferences;
+        if !had_settings {
+            app.close_tab(0, window, cx);
+        }
+        let index = app
+            .tabs
+            .iter()
+            .position(|tab| tab.terminal.as_ref() == Some(&terminal))
+            .unwrap();
+        app.activate(index, window, cx);
+    })?;
+    target
+        .handle
+        .update(cx, |app, window, cx| app.close_window(window, cx))?;
+    Ok(())
+}

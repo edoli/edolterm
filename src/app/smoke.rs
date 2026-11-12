@@ -195,6 +195,12 @@ pub fn start(
             let result = handle.update(cx, |_, window, cx| tabs::run(&root, window, cx));
             if let Err(e) = result.and_then(|r| r) { failure = Some(format!("{e:#}")); }
         }
+        #[cfg(all(feature = "ui-tests", windows))]
+        if mode == "tabs" && failure.is_none()
+            && let Err(error) = tabs::transfer(&root, handle, cx).await
+        {
+            failure = Some(format!("{error:#}"));
+        }
         #[cfg(feature = "ui-tests")]
         if mode == "drop" && failure.is_none() {
             // The output marker precedes PowerShell's prompt/ReadLine setup.

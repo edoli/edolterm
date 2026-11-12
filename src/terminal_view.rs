@@ -118,51 +118,7 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let focus = cx.focus_handle();
-        let subscriptions = vec![
-            cx.on_focus(&focus, window, |this, _, cx| {
-                this.bell = false;
-                this.cursor_on = true;
-                if let Some(s) = &this.session
-                    && s.terminal.lock().mode().contains(TermMode::FOCUS_IN_OUT)
-                {
-                    s.write(b"\x1b[I".to_vec());
-                }
-                this.blink = Some(cx.spawn(async move |this, cx| {
-                    loop {
-                        cx.background_executor()
-                            .timer(Duration::from_millis(600))
-                            .await;
-                        if this
-                            .update(cx, |this, cx| {
-                                this.cursor_on = !this.cursor_on;
-                                cx.notify();
-                            })
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }));
-                cx.emit(TerminalEvent::Metadata);
-                cx.notify();
-            }),
-            cx.on_blur(&focus, window, |this, _, cx| {
-                this.blink = None;
-                this.cursor_on = true;
-                if let Some(s) = &this.session
-                    && s.terminal.lock().mode().contains(TermMode::FOCUS_IN_OUT)
-                {
-                    s.write(b"\x1b[O".to_vec());
-                }
-                cx.notify();
-            }),
-            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
-            cx.observe_window_appearance(window, |this, _, cx| {
-                if this.settings.theme == "system" {
-                    cx.notify();
-                }
-            }),
-        ];
+        let subscriptions = Self::window_subscriptions(&focus, window, cx);
         Self {
             title: profile.name.clone(),
             profile,
@@ -202,6 +158,91 @@ impl TerminalView {
             _receiver: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    fn window_subscriptions(
+        focus: &FocusHandle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<Subscription> {
+        vec![
+            cx.on_focus(focus, window, |this, _, cx| {
+                this.bell = false;
+                this.cursor_on = true;
+                if let Some(s) = &this.session
+                    && s.terminal.lock().mode().contains(TermMode::FOCUS_IN_OUT)
+                {
+                    s.write(b"\x1b[I".to_vec());
+                }
+                this.blink = Some(cx.spawn(async move |this, cx| {
+                    loop {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(600))
+                            .await;
+                        if this
+                            .update(cx, |this, cx| {
+                                this.cursor_on = !this.cursor_on;
+                                cx.notify();
+                            })
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }));
+                cx.emit(TerminalEvent::Metadata);
+                cx.notify();
+            }),
+            cx.on_blur(focus, window, |this, _, cx| {
+                this.blink = None;
+                this.cursor_on = true;
+                if let Some(s) = &this.session
+                    && s.terminal.lock().mode().contains(TermMode::FOCUS_IN_OUT)
+                {
+                    s.write(b"\x1b[O".to_vec());
+                }
+                cx.notify();
+            }),
+            cx.observe_window_activation(window, |_, _, cx| cx.notify()),
+            cx.observe_window_appearance(window, |this, _, cx| {
+                if this.settings.theme == "system" {
+                    cx.notify();
+                }
+            }),
+        ]
+    }
+
+    /// Reattach window-local input/focus observers without restarting the PTY.
+    #[cfg(windows)]
+    pub(crate) fn detach_window(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.focus.is_focused(window)
+            && let Some(session) = &self.session
+            && session
+                .terminal
+                .lock()
+                .mode()
+                .contains(TermMode::FOCUS_IN_OUT)
+        {
+            session.write(b"\x1b[O".to_vec());
+        }
+        self.blink = None;
+        self._subscriptions.clear();
+        cx.notify();
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn attach_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.blink = None;
+        self.cursor_on = true;
+        self.selecting = false;
+        self.link_mouse_down = false;
+        self.win32_enter_pressed = false;
+        self.last_mouse = None;
+        self.preedit.clear();
+        self.preedit_selection = 0..0;
+        self.window_id = window.window_handle().window_id().as_u64();
+        self._subscriptions = Self::window_subscriptions(&self.focus, window, cx);
+        cx.notify();
     }
 
     pub fn start(&mut self, selected: bool, cx: &mut Context<Self>) {

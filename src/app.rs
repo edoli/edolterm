@@ -18,6 +18,8 @@ mod shortcuts;
 #[cfg(debug_assertions)]
 mod smoke;
 mod tab_menu;
+#[cfg(windows)]
+mod tab_transfer;
 mod tabs;
 mod taskbar;
 mod updates;
@@ -44,6 +46,8 @@ enum Startup {
         directory: Option<PathBuf>,
     },
     Default,
+    #[cfg(windows)]
+    Empty,
 }
 
 struct Tip(String);
@@ -141,7 +145,13 @@ impl TerminalApp {
                     windows::activated(window, cx);
                 }
                 if !window.is_window_active() {
-                    this.finish_tab_drag(true, window, cx);
+                    #[cfg(windows)]
+                    let transferring = tab_transfer::active(cx);
+                    #[cfg(not(windows))]
+                    let transferring = false;
+                    if !transferring {
+                        this.finish_tab_drag(true, window, cx);
+                    }
                     if this.tab_menu.take().is_some() {
                         this.restore_focus(window, cx);
                     }
@@ -254,6 +264,10 @@ impl TerminalApp {
             }
             startup => startup,
         };
+        #[cfg(windows)]
+        let empty = matches!(startup, Startup::Empty);
+        #[cfg(not(windows))]
+        let empty = false;
         if let Startup::Launch { profile, directory } = startup {
             this.add_terminal(
                 profile.unwrap_or_else(|| this.default_profile()),
@@ -289,7 +303,7 @@ impl TerminalApp {
                 this.start_restored_backgrounds(cx);
             }
         }
-        if this.tabs.is_empty() {
+        if this.tabs.is_empty() && !empty {
             this.new_default(window, cx);
         }
         this
@@ -398,8 +412,26 @@ impl TerminalApp {
         self.next_id += 1;
         let terminal =
             cx.new(|cx| TerminalView::new(profile, cwd, self.settings.clone(), window, cx));
-        let subscription = cx.subscribe_in(
-            &terminal,
+        let subscription = self.subscribe_terminal(id, &terminal, window, cx);
+        self.tabs.push(Tab {
+            id,
+            custom_title: None,
+            color: None,
+            terminal: Some(terminal),
+            _subscription: Some(subscription),
+        });
+        self.menu = false;
+    }
+
+    fn subscribe_terminal(
+        &self,
+        id: u64,
+        terminal: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Subscription {
+        cx.subscribe_in(
+            terminal,
             window,
             move |this, _, e: &TerminalEvent, window, cx| {
                 if matches!(e, TerminalEvent::Exited(true)) {
@@ -411,15 +443,7 @@ impl TerminalApp {
                     cx.notify();
                 }
             },
-        );
-        self.tabs.push(Tab {
-            id,
-            custom_title: None,
-            color: None,
-            terminal: Some(terminal),
-            _subscription: Some(subscription),
-        });
-        self.menu = false;
+        )
     }
 
     #[cfg(windows)]
@@ -532,6 +556,11 @@ impl TerminalApp {
     }
 
     pub fn should_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        #[cfg(windows)]
+        if tab_transfer::active(cx) {
+            tab_transfer::request_finish(true, cx);
+            return false;
+        }
         if self.closing {
             return false;
         }
@@ -794,6 +823,14 @@ impl TerminalApp {
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
         let m = k.modifiers;
+        #[cfg(windows)]
+        if tab_transfer::active(cx) {
+            if k.key == "escape" {
+                tab_transfer::request_finish(true, cx);
+            }
+            cx.stop_propagation();
+            return;
+        }
         if self.tab_drag.as_ref().is_some_and(|drag| drag.started) {
             if k.key == "escape" {
                 self.finish_tab_drag(true, window, cx);
@@ -1545,7 +1582,9 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
 impl Render for TerminalApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = Theme::from_setting(&self.settings.theme, cx);
-        let content = if let Some(t) = self.active_terminal() {
+        let content = if self.tabs.is_empty() {
+            div().flex_1().into_any_element()
+        } else if let Some(t) = self.active_terminal() {
             div().flex_1().min_h_0().child(t).into_any_element()
         } else {
             self.ensure_preferences(window, cx);

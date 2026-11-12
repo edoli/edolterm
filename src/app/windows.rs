@@ -13,6 +13,12 @@ pub(super) struct Entry {
     hwnd: isize,
     pub activation: u64,
 }
+impl Entry {
+    #[cfg(windows)]
+    pub(super) fn hwnd(&self) -> isize {
+        self.hwnd
+    }
+}
 pub(super) struct Windows {
     pub entries: Vec<Entry>,
     pub dir: PathBuf,
@@ -201,7 +207,7 @@ fn route_inner(
             let closing = entry
                 .root
                 .upgrade()
-                .is_none_or(|root| root.read(cx).closing);
+                .is_none_or(|root| root.read(cx).closing || root.read(cx).tabs.is_empty());
             (
                 entry.id,
                 entry.activation,
