@@ -154,6 +154,10 @@ pub(super) async fn run(
             cell_width.read(cx).input.read(cx).text == "0.7",
             "cell width decimal step"
         );
+        root.update(cx, |app, _| {
+            app.draft.ctrl_scroll_zoom = false;
+            app.draft.detect_urls = false;
+        });
         root.update(cx, |app, cx| app.save_settings(cx));
         let saved = Settings::load(&root.read(cx).dir)?;
         ensure!(
@@ -166,6 +170,19 @@ pub(super) async fn run(
                 && saved.line_height == 1.4
                 && saved.cell_width == 0.7,
             "numeric settings did not persist"
+        );
+        ensure!(
+            !saved.ctrl_scroll_zoom && !saved.detect_urls,
+            "interaction settings did not persist"
+        );
+        ensure!(
+            root.read(cx)
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.terminal.as_ref())
+                .all(|terminal| !terminal.read(cx).settings.ctrl_scroll_zoom
+                    && !terminal.read(cx).settings.detect_urls),
+            "interaction settings did not apply to existing terminals"
         );
         ensure!(
             root.read(cx)
@@ -483,6 +500,8 @@ fn pages_and_actions(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut A
     );
     root.update(cx, |app, cx| {
         app.draft.confirm_close = !original.confirm_close;
+        app.draft.ctrl_scroll_zoom = !original.ctrl_scroll_zoom;
+        app.draft.detect_urls = !original.detect_urls;
         app.set_shortcut_keys("newTab", Some(vec!["ctrl-y".into()]), cx);
     });
     for (page, name) in [

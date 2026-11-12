@@ -21,6 +21,8 @@ pub struct Settings {
     pub line_height: f32,
     /// Terminal column width as a multiple of the configured font size.
     pub cell_width: f32,
+    pub ctrl_scroll_zoom: bool,
+    pub detect_urls: bool,
     pub scrollback: usize,
     pub theme: String,
     pub confirm_close: bool,
@@ -48,6 +50,8 @@ impl Default for Settings {
             font_size: 15.,
             line_height: 1.2,
             cell_width: 0.6,
+            ctrl_scroll_zoom: true,
+            detect_urls: true,
             scrollback: 10_000,
             theme: "system".into(),
             confirm_close: true,
@@ -253,6 +257,19 @@ impl SavedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn interaction_settings_default_on_and_round_trip_when_disabled() {
+        let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
+        assert!(legacy.ctrl_scroll_zoom);
+        assert!(legacy.detect_urls);
+        let settings = Settings {
+            ctrl_scroll_zoom: false,
+            detect_urls: false,
+            ..Settings::default()
+        };
+        let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(settings, parsed);
+    }
     #[test]
     fn discoveries_round_trip_and_user_overrides_are_allowed() {
         let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();

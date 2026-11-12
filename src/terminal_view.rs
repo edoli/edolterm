@@ -21,7 +21,7 @@ mod file_drop;
 mod layout;
 mod links;
 mod scroll;
-use scroll::ScrollLines;
+use scroll::{ScrollLines, ScrollZoom};
 
 pub enum TerminalEvent {
     Metadata,
@@ -91,6 +91,7 @@ pub struct TerminalView {
     #[cfg(all(feature = "ui-tests", debug_assertions))]
     link_probe: Option<links::Probe>,
     scroll_lines: ScrollLines,
+    scroll_zoom: ScrollZoom,
     last_mouse: Option<(usize, usize)>,
     cursor_on: bool,
     win32_enter_pressed: bool,
@@ -185,6 +186,7 @@ impl TerminalView {
             #[cfg(all(feature = "ui-tests", debug_assertions))]
             link_probe: None,
             scroll_lines: ScrollLines::default(),
+            scroll_zoom: ScrollZoom::default(),
             last_mouse: None,
             cursor_on: true,
             win32_enter_pressed: false,
@@ -517,6 +519,8 @@ impl TerminalView {
 
     pub fn apply_settings(&mut self, settings: &Settings, cx: &mut Context<Self>) {
         self.settings = settings.clone();
+        self.scroll_lines = ScrollLines::default();
+        self.scroll_zoom = ScrollZoom::default();
         if let Some(s) = &self.session {
             s.terminal.lock().set_options(term_config(settings));
         }
@@ -840,6 +844,17 @@ impl TerminalView {
         cx.open_url(uri);
     }
     fn scroll(&mut self, e: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.settings.ctrl_scroll_zoom && links::activation(e.modifiers) {
+            cx.stop_propagation();
+            self.scroll_lines = ScrollLines::default();
+            let steps = self.scroll_zoom.update(e);
+            if steps != 0 {
+                self.settings.font_size = (self.settings.font_size + steps as f32).clamp(8., 128.);
+                cx.notify();
+            }
+            return;
+        }
+        self.scroll_zoom = ScrollZoom::default();
         let Some(s) = &self.session else {
             return;
         };

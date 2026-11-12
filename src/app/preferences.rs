@@ -472,6 +472,10 @@ impl TerminalApp {
                 })
                 .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창입니다. 대상 창이 없으면 새 창을 만듭니다.", theme, self.draft.windowing_behavior != self.settings.windowing_behavior, selector(&prefs.behavior)))
                 .child(setting("스크롤백", "탭마다 보관할 줄 수입니다. 최대 1,000,000줄까지 설정할 수 있습니다.", theme, prefs.history.read(cx).value(cx) != Some(self.settings.scrollback as f64), number(&prefs.history)))
+                .child(setting("Ctrl+스크롤로 글꼴 크기 조절", "Ctrl을 누른 채 위로 스크롤하면 현재 탭의 글꼴을 확대하고, 아래로 스크롤하면 축소합니다.", theme, self.draft.ctrl_scroll_zoom != self.settings.ctrl_scroll_zoom,
+                    div().flex().justify_end().child(toggle("ctrl-scroll-zoom", "Ctrl+스크롤로 글꼴 크기 조절", self.draft.ctrl_scroll_zoom, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.ctrl_scroll_zoom = !this.draft.ctrl_scroll_zoom; cx.notify(); })))))
+                .child(setting("URL 자동 감지", "일반 URL과 OSC 8 링크를 감지합니다. Ctrl을 누르면 밑줄로 표시하고, Ctrl+클릭으로 엽니다.", theme, self.draft.detect_urls != self.settings.detect_urls,
+                    div().flex().justify_end().child(toggle("detect-urls", "URL 자동 감지", self.draft.detect_urls, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.detect_urls = !this.draft.detect_urls; cx.notify(); })))))
                 .child(setting("창을 닫을 때 확인", "열린 세션이 있으면 창을 닫기 전에 확인합니다.", theme, self.draft.confirm_close != self.settings.confirm_close,
                     div().flex().justify_end().child(toggle("confirm-close", "창을 닫을 때 확인", self.draft.confirm_close, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.confirm_close = !this.draft.confirm_close; cx.notify(); })))))
                 .child(setting("세션 복원", "다음 실행 시 탭과 시작 폴더를 복원합니다. 실행 중인 명령과 출력은 복원되지 않습니다.", theme, self.draft.restore_session != self.settings.restore_session,

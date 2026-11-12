@@ -202,6 +202,9 @@ fn trim_punctuation(mut text: &str) -> &str {
 
 impl super::TerminalView {
     pub(super) fn link_at(&self, position: gpui::Point<gpui::Pixels>) -> Option<Link> {
+        if !self.settings.detect_urls {
+            return None;
+        }
         let session = self.session.as_ref()?;
         let x = f32::from(position.x - self.bounds.left()) - 8.;
         let y = f32::from(position.y - self.bounds.top()) - self.grid_top;
@@ -240,6 +243,10 @@ impl super::TerminalView {
     ) -> anyhow::Result<serde_json::Value> {
         use alacritty_terminal::vte::ansi::Processor;
         use gpui::*;
+        // Finish closing the search bar before placing cells in the fixture;
+        // resizing the terminal afterward can move those cells into history.
+        window.refresh();
+        window.draw(cx).clear(cx);
         terminal.update(cx, |view, cx| {
             view.link_probe = Some(Probe::default());
             let mut term = view.session.as_ref().unwrap().terminal.lock();
@@ -261,6 +268,10 @@ impl super::TerminalView {
             control: true,
             ..Default::default()
         };
+        anyhow::ensure!(
+            terminal.read(cx).link_at(position(0, cx)).is_some(),
+            "OSC 8 fixture was not detected"
+        );
         let click = |row, modifiers, window: &mut Window, cx: &mut App| {
             let p = position(row, cx);
             window.dispatch_event(
@@ -307,6 +318,67 @@ impl super::TerminalView {
             );
             Ok(())
         })?;
+        // The preference disables plain URL and OSC 8 hit testing and leaves
+        // Ctrl-click and Ctrl-wheel available to mouse-reporting applications.
+        let original = terminal.read(cx).settings.clone();
+        let disabled = crate::config::Settings {
+            detect_urls: false,
+            ctrl_scroll_zoom: false,
+            ..original.clone()
+        };
+        terminal.update(cx, |view, cx| view.apply_settings(&disabled, cx));
+        window.refresh();
+        window.draw(cx).clear(cx);
+        for row in [0, 1] {
+            anyhow::ensure!(
+                terminal.read(cx).link_at(position(row, cx)).is_none(),
+                "disabled link is still detected"
+            );
+            click(row, control, window, cx);
+        }
+        let wheel = ScrollEvent {
+            position: position(0, cx),
+            delta: ScrollDelta::Lines(point(0., 3.)),
+            modifiers: control,
+            touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
+        };
+        window.dispatch_event(PlatformInput::Scroll(wheel.clone()), cx);
+        terminal.read_with(cx, |view, _| -> anyhow::Result<()> {
+            let probe = view.link_probe.as_ref().unwrap();
+            anyhow::ensure!(
+                probe.opened.len() == 2,
+                "disabled URL detection opened a link"
+            );
+            anyhow::ensure!(
+                probe.mouse_reports.len() == 9,
+                "disabled features swallowed CLI mouse input"
+            );
+            Ok(())
+        })?;
+        terminal.update(cx, |view, cx| {
+            view.apply_settings(&original, cx);
+            view.link_probe.as_mut().unwrap().mouse_reports.clear();
+        });
+        window.dispatch_event(PlatformInput::Scroll(wheel), cx);
+        terminal.read_with(cx, |view, _| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                view.settings.font_size == original.font_size + 1.,
+                "Ctrl-wheel did not zoom in CLI mouse mode"
+            );
+            anyhow::ensure!(
+                view.link_probe.as_ref().unwrap().mouse_reports.is_empty(),
+                "zoom leaked wheel input to CLI"
+            );
+            Ok(())
+        })?;
+        terminal.update(cx, |view, cx| view.apply_settings(&original, cx));
+        window.refresh();
+        window.draw(cx).clear(cx);
+        anyhow::ensure!(
+            terminal.read(cx).link_at(position(0, cx)).is_some(),
+            "re-enabling URL detection did not restore links"
+        );
         click(0, Modifiers::default(), window, cx); // CLI still owns ordinary clicks.
         click(2, control, window, cx); // Unsupported OSC 8 target does not launch.
         click(3, control, window, cx); // A Ctrl-click on non-link text is preserved.

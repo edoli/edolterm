@@ -18,6 +18,7 @@ pub(super) fn run(
     });
     window.refresh();
     window.draw(cx).clear(cx);
+    zoom(root, window, cx)?;
     let event = ScrollEvent {
         position: point(px(200.), px(200.)),
         delta: ScrollDelta::Lines(point(0., 3.)),
@@ -84,4 +85,94 @@ pub(super) fn run(
         "direction reversal delayed: {reverse_offset}"
     );
     Ok(reverse_offset)
+}
+
+fn zoom(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> anyhow::Result<()> {
+    let terminal = root.read(cx).active_terminal().unwrap();
+    let original = terminal.read(cx).settings.clone();
+    let original_cols = terminal.read(cx).session.as_ref().unwrap().size.cols;
+    let mut event = ScrollEvent {
+        position: point(px(200.), px(200.)),
+        delta: ScrollDelta::Lines(point(0., 3.)),
+        modifiers: Modifiers {
+            control: true,
+            ..Default::default()
+        },
+        touch_phase: TouchPhase::Moved,
+        source: ScrollSource::Pointer,
+    };
+    terminal.update(cx, |view, _| view.settings.ctrl_scroll_zoom = true);
+    window.dispatch_event(PlatformInput::Scroll(event.clone()), cx);
+    anyhow::ensure!(
+        terminal.read(cx).settings.font_size == original.font_size + 1.,
+        "Ctrl-wheel did not zoom in one step"
+    );
+    anyhow::ensure!(
+        root.read(cx).settings.font_size == original.font_size,
+        "zoom changed saved font size"
+    );
+    window.refresh();
+    window.draw(cx).clear(cx);
+    anyhow::ensure!(
+        terminal.read(cx).session.as_ref().unwrap().size.cols < original_cols,
+        "zoom did not resize terminal grid"
+    );
+    event.delta = ScrollDelta::Lines(point(0., -3.));
+    window.dispatch_event(PlatformInput::Scroll(event.clone()), cx);
+    anyhow::ensure!(
+        terminal.read(cx).settings.font_size == original.font_size,
+        "Ctrl-wheel did not zoom out"
+    );
+    for (size, delta) in [(48., 3.), (8., -3.)] {
+        terminal.update(cx, |view, _| view.settings.font_size = size);
+        event.delta = ScrollDelta::Lines(point(0., delta));
+        window.dispatch_event(PlatformInput::Scroll(event.clone()), cx);
+        anyhow::ensure!(
+            terminal.read(cx).settings.font_size == size,
+            "Ctrl-wheel exceeded font size bounds"
+        );
+    }
+    terminal.update(cx, |view, cx| view.apply_settings(&original, cx));
+    window.refresh();
+    window.draw(cx).clear(cx);
+    terminal.update(cx, |view, _| {
+        view.settings.ctrl_scroll_zoom = false;
+        view.session
+            .as_ref()
+            .unwrap()
+            .terminal
+            .lock()
+            .scroll_display(Scroll::Bottom);
+    });
+    event.delta = ScrollDelta::Lines(point(0., 3.));
+    window.dispatch_event(PlatformInput::Scroll(event), cx);
+    anyhow::ensure!(
+        terminal.read(cx).settings.font_size == original.font_size,
+        "disabled Ctrl-wheel changed font size"
+    );
+    anyhow::ensure!(
+        terminal
+            .read(cx)
+            .session
+            .as_ref()
+            .unwrap()
+            .terminal
+            .lock()
+            .grid()
+            .display_offset()
+            == 3,
+        "disabled Ctrl-wheel lost normal scroll"
+    );
+    terminal.update(cx, |view, cx| {
+        view.apply_settings(&original, cx);
+        view.session
+            .as_ref()
+            .unwrap()
+            .terminal
+            .lock()
+            .scroll_display(Scroll::Bottom);
+    });
+    window.refresh();
+    window.draw(cx).clear(cx);
+    Ok(())
 }
