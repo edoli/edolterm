@@ -4,7 +4,9 @@ use keybindings::{Action, DEFINITIONS};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsPage {
-    General,
+    Behavior,
+    Appearance,
+    Profiles,
     Shortcuts,
 }
 
@@ -260,7 +262,9 @@ impl TerminalApp {
             )
             .children(
                 [
-                    (SettingsPage::General, "일반"),
+                    (SettingsPage::Behavior, "동작"),
+                    (SettingsPage::Appearance, "모양"),
+                    (SettingsPage::Profiles, "프로필"),
                     (SettingsPage::Shortcuts, "단축키"),
                 ]
                 .into_iter()
@@ -278,6 +282,7 @@ impl TerminalApp {
                         .aria_selected(self.settings_page == page)
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.settings_page = page;
+                            this.settings_scroll.set_offset(point(px(0.), px(0.)));
                             this.settings_scroll_drag = None;
                             this.shortcut_capture = None;
                             cx.notify();
@@ -285,15 +290,19 @@ impl TerminalApp {
                 }),
             );
         let content = match self.settings_page {
-            SettingsPage::General => self.general_settings_view(cx),
+            SettingsPage::Behavior | SettingsPage::Appearance | SettingsPage::Profiles => {
+                self.preferences_view(cx)
+            }
             SettingsPage::Shortcuts => self.shortcuts_view(cx),
         };
         div()
             .flex()
+            .flex_col()
             .flex_1()
             .min_h_0()
-            .child(nav)
-            .child(content)
+            .min_w_0()
+            .child(div().flex().flex_1().min_h_0().child(nav).child(content))
+            .child(self.settings_footer(theme, cx))
             .into_any_element()
     }
 
@@ -314,6 +323,7 @@ impl TerminalApp {
                 );
             }
             let id = definition.id;
+            let changed = self.draft.keybindings.get(id) != self.settings.keybindings.get(id);
             let keys = keybindings::keys(&self.draft.keybindings, definition);
             let mut chips = div()
                 .flex()
@@ -428,6 +438,9 @@ impl TerminalApp {
                     .py_3()
                     .border_b_1()
                     .border_color(theme.border)
+                    .when(changed, |row| {
+                        row.bg(theme.unsaved.bg).text_color(theme.unsaved.fg)
+                    })
                     .child(
                         div()
                             .min_w(px(135.))
@@ -456,32 +469,6 @@ impl TerminalApp {
                 theme,
                 cx,
             ))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
-                    .px_6()
-                    .py_3()
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .child(
-                        settings_button("reset-shortcuts", "모두 기본값으로", theme).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.draft.keybindings.clear();
-                                this.shortcut_capture = None;
-                                this.status =
-                                    Some("기본 단축키로 되돌렸습니다. 저장하면 적용됩니다.".into());
-                                cx.notify();
-                            }),
-                        ),
-                    )
-                    .child(
-                        primary_settings_button("save-shortcuts", "설정 저장", theme)
-                            .on_click(cx.listener(|this, _, _, cx| this.save_settings(cx))),
-                    ),
-            )
             .into_any_element()
     }
 }

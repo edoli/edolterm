@@ -14,6 +14,9 @@ fn press(name: &'static str, window: &mut Window, cx: &mut App) -> Result<()> {
 }
 
 pub(super) fn run(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Result<()> {
+    // Rebuild the input dispatch tree after returning from the settings tab.
+    window.refresh();
+    window.draw(cx).clear(cx);
     let clipboard = cx.read_from_clipboard();
     let result = exercise(root, window, cx);
     cx.write_to_clipboard(clipboard.unwrap_or_else(|| ClipboardItem::new_string(String::new())));

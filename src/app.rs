@@ -219,7 +219,7 @@ impl TerminalApp {
             settings_scroll: ScrollHandle::new(),
             shortcuts_scroll: ScrollHandle::new(),
             settings_scroll_drag: None,
-            settings_page: SettingsPage::General,
+            settings_page: SettingsPage::Behavior,
             shortcut_capture: None,
             shortcut_bindings,
             update_state: crate::update::read_result(&dir)
@@ -695,16 +695,24 @@ impl TerminalApp {
         }
         cx.notify();
     }
-    fn reset_general_settings(&mut self, cx: &mut Context<Self>) {
+    fn reset_settings(&mut self, cx: &mut Context<Self>) {
         self.draft = Settings {
             profiles: self.draft.profiles.clone(),
             discovered_profiles: self.draft.discovered_profiles.clone(),
-            keybindings: self.draft.keybindings.clone(),
             allow_osc52: self.draft.allow_osc52,
             ..Settings::default()
         };
         self.preferences = None;
-        self.status = Some("일반 설정을 기본값으로 되돌렸습니다. 저장하면 적용됩니다.".into());
+        self.shortcut_capture = None;
+        self.status = Some("설정을 기본값으로 되돌렸습니다. 저장하면 적용됩니다.".into());
+        cx.notify();
+    }
+
+    fn cancel_settings_changes(&mut self, cx: &mut Context<Self>) {
+        self.draft = self.settings.clone();
+        self.preferences = None;
+        self.shortcut_capture = None;
+        self.status = Some("저장하지 않은 변경 내용을 취소했습니다.".into());
         cx.notify();
     }
 

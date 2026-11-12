@@ -34,6 +34,15 @@ fn click(position: Point<Pixels>, window: &mut Window, cx: &mut App) {
     }
 }
 
+fn show_page(root: &Entity<TerminalApp>, page: SettingsPage, window: &mut Window, cx: &mut App) {
+    root.update(cx, |app, cx| {
+        app.settings_page = page;
+        app.settings_scroll.set_offset(point(px(0.), px(0.)));
+        cx.notify();
+    });
+    draw(window, cx);
+}
+
 fn set_number(
     input: &Entity<super::super::preferences::NumberInput>,
     value: &str,
@@ -59,6 +68,7 @@ pub(super) async fn run(
             app.settings_tab(window, cx);
         });
         draw(window, cx);
+        pages_and_actions(root, window, cx)?;
         scrollbars(root, window, cx)?;
         ensure!(
             !Select::font_discovery_started(cx),
@@ -72,6 +82,7 @@ pub(super) async fn run(
                 prefs.theme.clone(),
             )
         };
+        show_page(root, SettingsPage::Behavior, window, cx);
         // Click the actual dropdown trigger, including a second click to close it.
         let position = profile.read(cx).trigger_bounds().center();
         click(position, window, cx);
@@ -84,7 +95,11 @@ pub(super) async fn run(
             !profile.read(cx).open,
             "trigger click reopened its dropdown"
         );
-        for select in [&behavior, &theme] {
+        for (page, select) in [
+            (SettingsPage::Behavior, &behavior),
+            (SettingsPage::Appearance, &theme),
+        ] {
+            show_page(root, page, window, cx);
             select.update(cx, |select, cx| select.toggle(window, cx));
             draw(window, cx);
             press("down", window, cx)?;
@@ -114,11 +129,13 @@ pub(super) async fn run(
             size.read(cx).value(cx) == Some(18.5),
             "font size keyboard step"
         );
+        show_page(root, SettingsPage::Behavior, window, cx);
         set_number(&history, "12345", window, cx);
         ensure!(
             line_height.read(cx).input.read(cx).text == "1.2",
             "default line height formatting"
         );
+        show_page(root, SettingsPage::Appearance, window, cx);
         set_number(&line_height, "1.2", window, cx);
         press("up", window, cx)?;
         press("up", window, cx)?;
@@ -139,6 +156,10 @@ pub(super) async fn run(
         );
         root.update(cx, |app, cx| app.save_settings(cx));
         let saved = Settings::load(&root.read(cx).dir)?;
+        ensure!(
+            !root.read(cx).has_settings_changes(cx),
+            "saving left the settings marked as changed"
+        );
         ensure!(
             saved.font_size == 18.5
                 && saved.scrollback == 12345
@@ -185,6 +206,16 @@ pub(super) async fn run(
             (&history, "1.5"),
             (&history, "-1"),
         ] {
+            show_page(
+                root,
+                if input.entity_id() == history.entity_id() {
+                    SettingsPage::Behavior
+                } else {
+                    SettingsPage::Appearance
+                },
+                window,
+                cx,
+            );
             let previous = input.read(cx).input.read(cx).text.clone();
             set_number(input, invalid, window, cx);
             root.update(cx, |app, cx| app.save_settings(cx));
@@ -195,6 +226,7 @@ pub(super) async fn run(
             set_number(input, &previous, window, cx);
         }
         root.update(cx, |app, _| app.status = None);
+        show_page(root, SettingsPage::Appearance, window, cx);
         // Only this explicit font action may start discovery. Type before its
         // asynchronous completion to ensure the query survives the result.
         let scroll = root.read(cx).settings_scroll.clone();
@@ -227,7 +259,11 @@ pub(super) async fn run(
         let font = root.read(cx).preferences.as_ref().unwrap().font.clone();
         ensure!(
             font.read(cx).open && font.read(cx).search.read(cx).focus.is_focused(window),
-            "font popup lost focus while loading"
+            "font popup lost focus while loading (open={}, search_focus={}, settings_theme={}, draft_theme={})",
+            font.read(cx).open,
+            font.read(cx).search.read(cx).focus.is_focused(window),
+            root.read(cx).settings.theme,
+            root.read(cx).draft.theme,
         );
         ensure!(
             font.read(cx).visible_values() == vec!["Consolas"],
@@ -295,6 +331,48 @@ pub(super) async fn run(
         Ok(())
     })??;
     profile_search(root, handle, cx).await?;
+    narrow_layout(root, handle, cx).await?;
+    Ok(())
+}
+
+async fn narrow_layout(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let (original_size, active, page) = handle.update(cx, |_, window, cx| {
+        let original = (
+            window.viewport_size(),
+            root.read(cx).active,
+            root.read(cx).settings_page,
+        );
+        root.update(cx, |app, cx| app.settings_tab(window, cx));
+        window.resize(size(px(560.), px(500.)));
+        original
+    })?;
+    cx.background_executor()
+        .timer(Duration::from_millis(150))
+        .await;
+    handle.update(cx, |_, window, cx| -> Result<()> {
+        for (page, name) in [
+            (SettingsPage::Appearance, "appearance"),
+            (SettingsPage::Profiles, "profiles"),
+        ] {
+            show_page(root, page, window, cx);
+            window
+                .render_to_image()?
+                .save(root.read(cx).dir.join(format!("{name}-narrow.png")))?;
+        }
+        window.resize(original_size);
+        root.update(cx, |app, cx| {
+            app.settings_page = page;
+            app.activate(active, window, cx);
+        });
+        Ok(())
+    })??;
+    cx.background_executor()
+        .timer(Duration::from_millis(150))
+        .await;
     Ok(())
 }
 
@@ -366,9 +444,169 @@ async fn profile_search(
     Ok(())
 }
 
+fn pages_and_actions(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Result<()> {
+    let original = root.read(cx).settings.clone();
+    let dir = root.read(cx).dir.clone();
+    let saved_file = std::fs::read(dir.join("settings.toml"))?;
+    show_page(root, SettingsPage::Appearance, window, cx);
+    let size = root.read(cx).preferences.as_ref().unwrap().size.clone();
+    ensure!(
+        !root.read(cx).has_settings_changes(cx),
+        "settings initially marked as changed"
+    );
+    window
+        .render_to_image()?
+        .save(dir.join("save-button-clean.png"))?;
+    set_number(&size, &format!("{:.1}", original.font_size), window, cx);
+    ensure!(
+        !root.read(cx).has_settings_changes(cx),
+        "equivalent number formatting marked as changed"
+    );
+    set_number(&size, &(original.font_size + 1.).to_string(), window, cx);
+    ensure!(
+        root.read(cx).has_settings_changes(cx),
+        "numeric edit not detected before saving"
+    );
+    draw(window, cx);
+    window
+        .render_to_image()?
+        .save(dir.join("save-button-changed.png"))?;
+    set_number(&size, &original.font_size.to_string(), window, cx);
+    ensure!(
+        !root.read(cx).has_settings_changes(cx),
+        "reverting numeric edit retained change state"
+    );
+    set_number(&size, "unsaved", window, cx);
+    ensure!(
+        root.read(cx).has_settings_changes(cx),
+        "invalid numeric edit not detected"
+    );
+    root.update(cx, |app, cx| {
+        app.draft.confirm_close = !original.confirm_close;
+        app.set_shortcut_keys("newTab", Some(vec!["ctrl-y".into()]), cx);
+    });
+    for (page, name) in [
+        (SettingsPage::Behavior, "behavior"),
+        (SettingsPage::Appearance, "appearance"),
+        (SettingsPage::Profiles, "profiles"),
+        (SettingsPage::Shortcuts, "shortcuts"),
+    ] {
+        show_page(root, page, window, cx);
+        ensure!(
+            size.read(cx).input.read(cx).text == "unsaved",
+            "navigation discarded numeric input"
+        );
+        ensure!(
+            root.read(cx).settings == original,
+            "navigation applied unsaved settings"
+        );
+        window
+            .render_to_image()?
+            .save(dir.join(format!("{name}-page.png")))?;
+    }
+    // All pages share the footer. Click its cancel action after removing the status row.
+    root.update(cx, |app, cx| {
+        app.status = None;
+        cx.notify();
+    });
+    draw(window, cx);
+    let viewport = window.viewport_size();
+    click(
+        point(viewport.width - px(170.), viewport.height - px(29.)),
+        window,
+        cx,
+    );
+    ensure!(
+        root.read(cx).draft == original,
+        "cancel did not restore all settings pages"
+    );
+    ensure!(
+        !root.read(cx).has_settings_changes(cx),
+        "cancel retained change state"
+    );
+    ensure!(
+        root.read(cx).shortcut_capture.is_none(),
+        "cancel left shortcut capture active"
+    );
+    ensure!(
+        root.read(cx)
+            .preferences
+            .as_ref()
+            .unwrap()
+            .size
+            .read(cx)
+            .value(cx)
+            == Some(original.font_size as f64),
+        "cancel retained invalid numeric input"
+    );
+    ensure!(
+        std::fs::read(dir.join("settings.toml"))? == saved_file,
+        "cancel wrote the settings file"
+    );
+
+    root.update(cx, |app, cx| {
+        app.set_shortcut_keys("newTab", Some(vec!["ctrl-y".into()]), cx);
+        app.status = None;
+    });
+    ensure!(
+        root.read(cx).has_settings_changes(cx),
+        "shortcut edit not detected"
+    );
+    draw(window, cx);
+    click(
+        point(viewport.width - px(295.), viewport.height - px(29.)),
+        window,
+        cx,
+    );
+    let defaults = Settings {
+        profiles: original.profiles.clone(),
+        discovered_profiles: original.discovered_profiles.clone(),
+        allow_osc52: original.allow_osc52,
+        ..Settings::default()
+    };
+    ensure!(
+        root.read(cx).draft == defaults,
+        "reset did not restore settings and shortcuts together"
+    );
+    ensure!(
+        root.read(cx).settings == original,
+        "reset applied before saving"
+    );
+    ensure!(
+        std::fs::read(dir.join("settings.toml"))? == saved_file,
+        "reset wrote before saving"
+    );
+    root.update(cx, |app, cx| app.cancel_settings_changes(cx));
+    draw(window, cx);
+
+    // Cancel uses the applied state; reload explicitly reads external file edits.
+    let mut external = original.clone();
+    external.font_size = if original.font_size == 20. { 21. } else { 20. };
+    external.save(&dir)?;
+    root.update(cx, |app, cx| app.cancel_settings_changes(cx));
+    ensure!(
+        root.read(cx).draft == original,
+        "cancel unexpectedly loaded external edits"
+    );
+    root.update(cx, |app, cx| {
+        app.status = None;
+        cx.notify();
+    });
+    draw(window, cx);
+    click(point(px(90.), viewport.height - px(29.)), window, cx);
+    ensure!(
+        root.read(cx).settings == external && root.read(cx).draft == external,
+        "footer reload did not apply external edits"
+    );
+    original.save(&dir)?;
+    root.update(cx, |app, cx| app.reload_settings(cx));
+    draw(window, cx);
+    Ok(())
+}
+
 fn scrollbars(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Result<()> {
     for (page, name) in [
-        (SettingsPage::General, "general"),
+        (SettingsPage::Behavior, "behavior"),
         (SettingsPage::Shortcuts, "shortcuts"),
     ] {
         root.update(cx, |app, cx| {
@@ -377,11 +615,18 @@ fn scrollbars(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> 
         });
         draw(window, cx);
         let scroll = match page {
-            SettingsPage::General => root.read(cx).settings_scroll.clone(),
             SettingsPage::Shortcuts => root.read(cx).shortcuts_scroll.clone(),
+            _ => root.read(cx).settings_scroll.clone(),
         };
         let bounds = scroll.bounds();
         let max = scroll.max_offset().y;
+        if max <= px(0.) && page != SettingsPage::Shortcuts {
+            ensure!(
+                scroll.offset().y == px(0.),
+                "non-scrolling page retained an offset"
+            );
+            continue;
+        }
         ensure!(
             max > px(0.),
             "{name} settings must overflow in the test window"
@@ -488,7 +733,7 @@ fn scrollbars(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> 
         scroll.set_offset(point(px(0.), px(0.)));
     }
     root.update(cx, |app, cx| {
-        app.settings_page = SettingsPage::General;
+        app.settings_page = SettingsPage::Profiles;
         cx.notify();
     });
     draw(window, cx);

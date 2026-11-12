@@ -52,6 +52,7 @@ pub struct Theme {
     pub muted: Hsla,
     pub hover: Hsla,
     pub accent: Hsla,
+    pub unsaved: SurfaceColors,
     pub description: Hsla,
     pub bell: Hsla,
     pub overlay: Hsla,
@@ -97,6 +98,10 @@ impl Theme {
             muted: rgb(0xb0b0b0).into(),
             hover: rgb(0x3c3c3c).into(),
             accent: rgb(0x85b6ff).into(),
+            unsaved: SurfaceColors {
+                bg: rgb(0x253246).into(),
+                fg: rgb(0x85b6ff).into(),
+            },
             description: rgb(0x929baa).into(),
             bell: rgb(0xe5c07b).into(),
             overlay: rgba(0x00000088).into(),
@@ -148,6 +153,10 @@ impl Theme {
                 muted: rgb(0x5d6572).into(),
                 hover: rgb(0xdce0e7).into(),
                 accent: rgb(0x3469bc).into(),
+                unsaved: SurfaceColors {
+                    bg: rgb(0xeaf1fc).into(),
+                    fg: rgb(0x3469bc).into(),
+                },
                 description: rgb(0x5d6572).into(),
                 scrollbar: Hsla::from(rgb(0x5d6572)).opacity(0.45),
                 input: InputColors {
