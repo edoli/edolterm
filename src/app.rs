@@ -68,7 +68,6 @@ pub struct TerminalApp {
     dir: PathBuf,
     settings: Settings,
     draft: Settings,
-    detected: Vec<Profile>,
     profiles: Vec<Profile>,
     tabs: Vec<Tab>,
     active: usize,
@@ -108,7 +107,6 @@ impl TerminalApp {
     fn new(
         dir: PathBuf,
         settings: Settings,
-        detected: Vec<Profile>,
         startup: Startup,
         error: Option<String>,
         window: &mut Window,
@@ -116,6 +114,7 @@ impl TerminalApp {
     ) -> Self {
         let search = cx.new(|cx| TextField::new("", "터미널에서 찾기", cx));
         let subscriptions = vec![
+            cx.observe_global::<preferences::ProfileSearch>(|_, cx| cx.notify()),
             cx.subscribe_in(
                 &search,
                 window,
@@ -149,14 +148,36 @@ impl TerminalApp {
             cx.observe_global::<windows::SharedSettings>(|this, cx| {
                 let settings = cx.global::<windows::SharedSettings>().0.clone();
                 if this.settings != settings {
+                    let mut previous = this.settings.clone();
+                    previous.discovered_profiles = settings.discovered_profiles.clone();
+                    if previous == settings {
+                        // Preserve unsaved text/number edits when a profile search completes.
+                        this.settings.discovered_profiles = settings.discovered_profiles.clone();
+                        this.draft.discovered_profiles = settings.discovered_profiles.clone();
+                        this.profiles = platform::configured_profiles(&settings);
+                        if let Some(prefs) = &this.preferences {
+                            let choices = this
+                                .profiles
+                                .iter()
+                                .map(|p| {
+                                    crate::select::Choice::new(p.id.clone(), p.name.clone())
+                                        .with_profile_icon(p.program.clone())
+                                })
+                                .collect();
+                            prefs
+                                .profile
+                                .update(cx, |select, cx| select.replace_choices(choices, cx));
+                        }
+                        cx.notify();
+                        return;
+                    }
                     this.settings = settings.clone();
                     this.draft = settings;
                     this.shortcut_bindings =
                         Bindings::new(&this.settings.keybindings).expect("validated settings");
                     this.shortcut_capture = None;
                     this.preferences = None;
-                    this.profiles =
-                        platform::merge_profiles(this.detected.clone(), &this.settings.profiles);
+                    this.profiles = platform::configured_profiles(&this.settings);
                     for tab in &this.tabs {
                         if let Some(terminal) = &tab.terminal {
                             terminal.update(cx, |terminal, cx| {
@@ -168,13 +189,12 @@ impl TerminalApp {
                 }
             }),
         ];
-        let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
+        let profiles = platform::configured_profiles(&settings);
         let shortcut_bindings = Bindings::new(&settings.keybindings).expect("validated settings");
         let mut this = Self {
             dir: dir.clone(),
             draft: settings.clone(),
             settings,
-            detected,
             profiles,
             tabs: Vec::new(),
             active: 0,
@@ -248,13 +268,10 @@ impl TerminalApp {
                 }
             }
             if !this.tabs.is_empty() {
-                // Preserve visual tab order, but enqueue the selected shell first.
+                // Keep the initial PowerShell's runtime initialization free of
+                // competing background shells. Selecting any tab still starts it now.
                 this.activate(restored_active, window, cx);
-                for tab in &this.tabs {
-                    if let Some(terminal) = &tab.terminal {
-                        terminal.update(cx, |terminal, cx| terminal.start(false, cx));
-                    }
-                }
+                this.start_restored_backgrounds(cx);
             }
         }
         if this.tabs.is_empty() {
@@ -265,6 +282,63 @@ impl TerminalApp {
 
     fn active_terminal(&self) -> Option<Entity<TerminalView>> {
         self.tabs.get(self.active)?.terminal.clone()
+    }
+
+    fn start_restored_backgrounds(&self, cx: &mut Context<Self>) {
+        let ids: Vec<_> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != self.active)
+            .map(|(_, tab)| tab.id)
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let began = Instant::now();
+            loop {
+                match this.update(cx, |app, cx| {
+                    if app.closing {
+                        return None;
+                    }
+                    Some(
+                        began.elapsed() >= Duration::from_secs(3)
+                            || app.active_terminal().is_none_or(|terminal| {
+                                let terminal = terminal.read(cx);
+                                terminal.error.is_some()
+                                    || terminal.exited
+                                    || terminal
+                                        .session
+                                        .as_ref()
+                                        .is_some_and(|session| session.prompt_reported())
+                            }),
+                    )
+                }) {
+                    Ok(Some(true)) => break,
+                    Ok(Some(false)) => {
+                        cx.background_executor()
+                            .timer(Duration::from_millis(25))
+                            .await
+                    }
+                    _ => return,
+                }
+            }
+            let _ = this.update(cx, |app, cx| {
+                if app.closing {
+                    return;
+                }
+                platform::trace_startup("background_restore_start");
+                for tab in &app.tabs {
+                    if ids.contains(&tab.id)
+                        && let Some(terminal) = &tab.terminal
+                    {
+                        terminal.update(cx, |terminal, cx| terminal.start(false, cx));
+                    }
+                }
+            });
+        })
+        .detach();
     }
     fn default_profile(&self) -> Profile {
         self.profiles
@@ -624,6 +698,7 @@ impl TerminalApp {
     fn reset_general_settings(&mut self, cx: &mut Context<Self>) {
         self.draft = Settings {
             profiles: self.draft.profiles.clone(),
+            discovered_profiles: self.draft.discovered_profiles.clone(),
             keybindings: self.draft.keybindings.clone(),
             allow_osc52: self.draft.allow_osc52,
             ..Settings::default()
@@ -654,8 +729,7 @@ impl TerminalApp {
                 self.shortcut_capture = None;
                 cx.set_global(windows::SharedSettings(self.settings.clone()));
                 self.config_error = false;
-                self.profiles =
-                    platform::merge_profiles(self.detected.clone(), &self.settings.profiles);
+                self.profiles = platform::configured_profiles(&self.settings);
                 for tab in &self.tabs {
                     if let Some(t) = &tab.terminal {
                         t.update(cx, |t, cx| t.apply_settings(&self.settings, cx));
@@ -677,8 +751,7 @@ impl TerminalApp {
                     Bindings::new(&self.settings.keybindings).expect("validated settings");
                 self.shortcut_capture = None;
                 self.preferences = None;
-                self.profiles =
-                    platform::merge_profiles(self.detected.clone(), &self.settings.profiles);
+                self.profiles = platform::configured_profiles(&self.settings);
                 for tab in &self.tabs {
                     if let Some(t) = &tab.terminal {
                         t.update(cx, |t, cx| t.apply_settings(&self.settings, cx));
@@ -1548,6 +1621,137 @@ impl Render for TerminalApp {
     }
 }
 
+/// Match the first selected tab without creating any UI state. Keep the same
+/// filtering and active-index rules as TerminalApp::new's restoration path.
+#[cfg(windows)]
+fn initial_session(
+    settings: &Settings,
+    profiles: &[Profile],
+    saved: &SavedSession,
+    options: &crate::cli::Options,
+) -> Option<(Profile, Option<PathBuf>)> {
+    // Handoffs already have a child. Multiple windows retain the existing
+    // per-window launcher ordering rather than speculating about a target.
+    if options.handoff.is_some() || saved.windows.len() > 1 {
+        return None;
+    }
+    let default = || {
+        profiles
+            .iter()
+            .find(|p| p.id == settings.default_profile)
+            .or_else(|| profiles.first())
+            .cloned()
+    };
+    if options.profile.is_some() || options.working_directory.is_some() {
+        let profile = if let Some(id) = &options.profile {
+            profiles.iter().find(|p| &p.id == id).cloned()
+        } else {
+            default()
+        }?;
+        return Some((profile, options.working_directory.clone()));
+    }
+    if settings.restore_session {
+        let saved = saved.windows.first().unwrap_or(saved);
+        let mut first = None;
+        let mut selected = None;
+        for (index, tab) in saved.tabs.iter().take(50).enumerate() {
+            if let Some(profile) = profiles.iter().find(|p| p.id == tab.profile_id) {
+                let candidate = (profile.clone(), Some(tab.cwd.clone()));
+                first.get_or_insert_with(|| candidate.clone());
+                if index <= saved.active {
+                    selected = Some(candidate);
+                }
+            }
+        }
+        if let Some(selected) = selected.or(first) {
+            return Some(selected);
+        }
+    }
+    default().map(|profile| (profile, None))
+}
+
+#[cfg(all(test, windows))]
+mod startup_tests {
+    use super::{PathBuf, Profile, SavedSession, SavedTab, Settings, initial_session};
+
+    #[test]
+    fn prestart_matches_default_explicit_and_filtered_restore_selection() {
+        let profiles = vec![
+            Profile::new("pwsh", "PowerShell", "pwsh.exe", &[]),
+            Profile::new("cmd", "CMD", "cmd.exe", &[]),
+        ];
+        let mut settings = Settings {
+            default_profile: "cmd".into(),
+            ..Settings::default()
+        };
+        let mut saved = SavedSession::default();
+        let mut options = crate::cli::Options::default();
+        let selected =
+            |settings: &Settings, saved: &SavedSession, options: &crate::cli::Options| {
+                initial_session(settings, &profiles, saved, options).map(|(p, cwd)| (p.id, cwd))
+            };
+        assert_eq!(
+            selected(&settings, &saved, &options),
+            Some(("cmd".into(), None))
+        );
+        saved.tabs = ["missing", "pwsh", "missing", "cmd"]
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| SavedTab {
+                profile_id: id.into(),
+                cwd: PathBuf::from(format!("C:/tab{i}")),
+                custom_title: None,
+                color: None,
+            })
+            .collect();
+        for (active, id, cwd) in [
+            (0, "pwsh", "C:/tab1"),
+            (1, "pwsh", "C:/tab1"),
+            (2, "pwsh", "C:/tab1"),
+            (3, "cmd", "C:/tab3"),
+            (99, "cmd", "C:/tab3"),
+        ] {
+            saved.active = active;
+            assert_eq!(
+                selected(&settings, &saved, &options),
+                Some((id.into(), Some(cwd.into())))
+            );
+        }
+        options.working_directory = Some("C:/explicit".into());
+        assert_eq!(
+            selected(&settings, &saved, &options),
+            Some(("cmd".into(), options.working_directory.clone()))
+        );
+        options.profile = Some("pwsh".into());
+        assert_eq!(
+            selected(&settings, &saved, &options),
+            Some(("pwsh".into(), options.working_directory.clone()))
+        );
+        options.profile = Some("missing".into());
+        assert!(selected(&settings, &saved, &options).is_none());
+        options = crate::cli::Options::default();
+        settings.restore_session = false;
+        assert_eq!(
+            selected(&settings, &saved, &options),
+            Some(("cmd".into(), None))
+        );
+        settings.restore_session = true;
+        let single_window = SavedSession {
+            windows: vec![saved.clone()],
+            ..SavedSession::default()
+        };
+        assert_eq!(
+            selected(&settings, &single_window, &options),
+            selected(&settings, &saved, &options)
+        );
+        let multiple = SavedSession {
+            windows: vec![saved.clone(), saved],
+            ..SavedSession::default()
+        };
+        assert!(selected(&settings, &multiple, &options).is_none());
+    }
+}
+
 pub fn run(launch_options: crate::cli::Options) {
     #[cfg(debug_assertions)]
     let smoke_mode = launch_options.smoke_mode.clone();
@@ -1593,6 +1797,7 @@ pub fn run(launch_options: crate::cli::Options) {
         }
     };
     let loaded = Settings::load(&dir);
+    platform::trace_startup("instance_ready");
     let (settings, mut error) = match loaded {
         Ok(s) => (s, None),
         Err(e) => (
@@ -1608,12 +1813,7 @@ pub fn run(launch_options: crate::cli::Options) {
     } else {
         settings
     };
-    if error.is_none()
-        && !dir.join("settings.toml").exists()
-        && let Err(e) = settings.save(&dir)
-    {
-        error = Some(format!("{e:#}"));
-    }
+    let initialize_profiles = error.is_none();
     let saved = match SavedSession::load(&dir) {
         Ok(s) => s,
         Err(e) => {
@@ -1627,24 +1827,100 @@ pub fn run(launch_options: crate::cli::Options) {
     } else {
         saved
     };
-    let detected = platform::discover_profiles();
-    let profiles = platform::merge_profiles(detected.clone(), &settings.profiles);
-    let launch_profile = match launch_options.profile.as_ref() {
-        Some(id) => match profiles.iter().find(|profile| &profile.id == id) {
-            Some(profile) => Some(profile.clone()),
-            None => {
-                platform::show_startup_error(&format!("프로필을 찾을 수 없습니다: {id}"));
-                std::process::exit(2);
-            }
-        },
-        None => None,
+    platform::trace_startup("config_ready");
+    let mut startup_settings = settings;
+    let startup_directory = dir.clone();
+    #[cfg(windows)]
+    let startup_saved = saved.clone();
+    // Incoming contains owned OS handles and stays on the main thread.
+    let startup_profile = launch_options.profile.clone();
+    #[cfg(windows)]
+    let startup_options = crate::cli::Options {
+        profile: startup_profile.clone(),
+        working_directory: launch_options.working_directory.clone(),
+        ..Default::default()
     };
+    #[cfg(windows)]
+    let prestart_enabled = launch_options.handoff.is_none();
+    #[cfg(all(windows, debug_assertions))]
+    let prestart_enabled = prestart_enabled && smoke_mode.is_none();
+    let bootstrap = std::thread::Builder::new()
+        .name("edolterm-bootstrap".into())
+        .spawn(move || -> anyhow::Result<_> {
+            let profile_error = if initialize_profiles {
+                platform::initialize_profiles(&mut startup_settings, &startup_directory)
+                    .err()
+                    .map(|error| format!("프로필 검색 결과를 저장하지 못했습니다: {error:#}"))
+            } else {
+                None
+            };
+            platform::trace_startup("profiles_ready");
+            let profiles = platform::configured_profiles(&startup_settings);
+            let launch_profile = startup_profile
+                .as_ref()
+                .map(|id| {
+                    profiles
+                        .iter()
+                        .find(|profile| &profile.id == id)
+                        .cloned()
+                        .ok_or_else(|| anyhow::anyhow!("프로필을 찾을 수 없습니다: {id}"))
+                })
+                .transpose()?;
+            #[cfg(windows)]
+            let starts = if prestart_enabled {
+                initial_session(
+                    &startup_settings,
+                    &profiles,
+                    &startup_saved,
+                    &startup_options,
+                )
+                .map(|(profile, cwd)| {
+                    crate::terminal_view::SessionStarts::prestart(
+                        profile,
+                        cwd,
+                        startup_settings.clone(),
+                    )
+                })
+                .transpose()?
+            } else {
+                None
+            };
+            #[cfg(not(windows))]
+            let starts: Option<crate::terminal_view::SessionStarts> = None;
+            Ok((startup_settings, launch_profile, starts, profile_error))
+        });
+    let bootstrap = match bootstrap {
+        Ok(bootstrap) => bootstrap,
+        Err(error) => {
+            platform::show_startup_error(&format!("시작 작업을 만들지 못했습니다: {error}"));
+            std::process::exit(2);
+        }
+    };
+    platform::trace_startup("gpui_start");
     gpui_platform::application()
         .with_assets(icons::Assets)
         .run(move |cx| {
+            platform::trace_startup("gpui_ready");
+            let (settings, launch_profile, starts, profile_error) = match bootstrap.join() {
+                Ok(Ok(prepared)) => prepared,
+                result => {
+                    let error = match result {
+                        Ok(Err(error)) => format!("{error:#}"),
+                        Err(_) => "시작 작업이 종료되었습니다.".into(),
+                        _ => unreachable!(),
+                    };
+                    platform::show_startup_error(&error);
+                    std::process::exit(2);
+                }
+            };
+            let error = error.or(profile_error);
+            if let Some(starts) = starts {
+                cx.set_global(starts);
+            }
             cx.set_app_identity(crate::taskbar::APP_ID, "Edolterm");
+            cx.set_global(preferences::ProfileSearch::default());
             cx.set_global(windows::SharedSettings(settings.clone()));
-            cx.set_global(windows::Windows::new(dir, detected, saved.clone()));
+            cx.set_global(windows::Windows::new(dir, saved.clone()));
             #[cfg(debug_assertions)]
             let update_taskbar = smoke_mode.is_none();
             #[cfg(not(debug_assertions))]

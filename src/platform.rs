@@ -5,6 +5,43 @@ use std::{
     process::Command,
 };
 
+/// Opt-in startup diagnostics. No file is opened during normal launches.
+pub fn trace_startup(stage: &str) {
+    use std::{
+        io::Write,
+        sync::{Mutex, OnceLock},
+        time::Instant,
+    };
+    struct Trace {
+        start: Instant,
+        file: Mutex<std::fs::File>,
+    }
+    static TRACE: OnceLock<Option<Trace>> = OnceLock::new();
+    if let Some(trace) = TRACE.get_or_init(|| {
+        let start = Instant::now();
+        let path = std::env::var_os("EDOLTERM_STARTUP_TRACE")?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()?;
+        Some(Trace {
+            start,
+            file: Mutex::new(file),
+        })
+    }) && let Ok(mut file) = trace.file.lock()
+    {
+        let _ = writeln!(
+            file,
+            "{}",
+            serde_json::json!({
+                "stage": stage, "elapsed_ms": trace.start.elapsed().as_secs_f64() * 1000.,
+                "pid": std::process::id(),
+            })
+        );
+    }
+}
+
 pub fn home_dir() -> PathBuf {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
         .map(PathBuf::from)
@@ -56,6 +93,7 @@ pub fn find_program(name: &str) -> Option<PathBuf> {
 }
 
 pub fn discover_profiles() -> Vec<Profile> {
+    trace_startup("profile_search");
     let mut profiles = Vec::new();
     #[cfg(windows)]
     {
@@ -90,6 +128,7 @@ pub fn discover_profiles() -> Vec<Profile> {
             &[],
         ));
         let wsl = system.join("wsl.exe");
+        trace_startup("wsl_list");
         if wsl.is_file()
             && let Ok(output) = quiet_command(&wsl).args(["--list", "--quiet"]).output()
             && output.status.success()
@@ -116,6 +155,34 @@ pub fn discover_profiles() -> Vec<Profile> {
         }
     }
     profiles
+}
+
+/// Resolve only saved data. Do not inspect executable paths or enumerate shells.
+pub fn configured_profiles(settings: &crate::config::Settings) -> Vec<Profile> {
+    merge_profiles(settings.discovered_profiles.clone(), &settings.profiles)
+}
+
+/// Search and persist once when neither a saved search nor a user profile exists.
+pub fn initialize_profiles(
+    settings: &mut crate::config::Settings,
+    directory: &Path,
+) -> anyhow::Result<bool> {
+    initialize_profiles_using(settings, directory, discover_profiles)
+}
+
+fn initialize_profiles_using(
+    settings: &mut crate::config::Settings,
+    directory: &Path,
+    discover: impl FnOnce() -> Vec<Profile>,
+) -> anyhow::Result<bool> {
+    if !settings.discovered_profiles.is_empty() || !settings.profiles.is_empty() {
+        return Ok(false);
+    }
+    // Keep the found profiles usable in this process if persistence fails;
+    // the caller reports the error and a later launch can retry saving.
+    settings.discovered_profiles = discover();
+    settings.save(directory)?;
+    Ok(true)
 }
 
 #[cfg(windows)]
@@ -222,6 +289,77 @@ pub fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn saved_discoveries_are_available_without_search_and_custom_profiles_win() {
+        let builtin = Profile::new("pwsh", "Built-in", "pwsh.exe", &[]);
+        let cached = Profile::new(
+            "wsl:Ubuntu",
+            "Ubuntu",
+            "wsl.exe",
+            &["--distribution", "Ubuntu"],
+        );
+        let custom = Profile::new("pwsh", "Custom", "custom.exe", &[]);
+        let settings = crate::config::Settings {
+            discovered_profiles: vec![builtin.clone(), cached.clone()],
+            profiles: vec![custom.clone()],
+            ..Default::default()
+        };
+        assert_eq!(configured_profiles(&settings), [custom, cached]);
+    }
+
+    #[test]
+    fn first_run_search_is_saved_and_subsequent_runs_never_search_or_rewrite() {
+        use crate::config::Settings;
+        let temporary = std::env::temp_dir().canonicalize().unwrap();
+        let root = temporary.join(format!("edolterm-profile-init-{}", std::process::id()));
+        let mut settings = Settings {
+            font_size: 17.5,
+            ..Settings::default()
+        };
+        let calls = std::cell::Cell::new(0);
+        assert!(
+            initialize_profiles_using(&mut settings, &root, || {
+                calls.set(calls.get() + 1);
+                vec![Profile::new(
+                    "cached",
+                    "Cached shell",
+                    "__missing_executable__.exe",
+                    &[],
+                )]
+            })
+            .unwrap()
+        );
+        assert_eq!(calls.get(), 1);
+        let original = std::fs::read(root.join("settings.toml")).unwrap();
+        let mut reloaded = Settings::load(&root).unwrap();
+        assert_eq!(reloaded.font_size, 17.5);
+        assert_eq!(configured_profiles(&reloaded), settings.discovered_profiles);
+        assert!(
+            !initialize_profiles_using(&mut reloaded, &root, || panic!(
+                "cached startup searched again"
+            ))
+            .unwrap()
+        );
+        assert_eq!(original, std::fs::read(root.join("settings.toml")).unwrap());
+        assert!(root.canonicalize().unwrap().starts_with(&temporary));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_user_profiles_skip_initial_search_even_without_discoveries() {
+        let custom = Profile::new("custom", "Custom", "missing.exe", &[]);
+        let mut settings = crate::config::Settings {
+            profiles: vec![custom.clone()],
+            ..Default::default()
+        };
+        assert!(
+            !initialize_profiles_using(&mut settings, Path::new("unused"), || panic!(
+                "custom-only startup searched"
+            ))
+            .unwrap()
+        );
+        assert_eq!(configured_profiles(&settings), [custom]);
+    }
     #[test]
     fn custom_profiles_override_without_duplication() {
         let base = vec![Profile::new("shell", "Shell", "sh", &[])];

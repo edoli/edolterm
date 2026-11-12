@@ -13,19 +13,32 @@ use std::{
     collections::HashMap,
     io::{self, Read, Write},
     path::PathBuf,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 #[derive(Clone)]
-pub(super) struct WorkingDirectory(Arc<Mutex<PathBuf>>);
+pub(super) struct WorkingDirectory {
+    path: Arc<Mutex<PathBuf>>,
+    reported: Arc<AtomicBool>,
+}
 
 impl WorkingDirectory {
     pub fn new(path: PathBuf) -> Self {
-        Self(Arc::new(Mutex::new(path)))
+        Self {
+            path: Arc::new(Mutex::new(path)),
+            reported: Arc::new(AtomicBool::new(false)),
+        }
     }
 
     pub fn get(&self) -> PathBuf {
-        self.0.lock().unwrap().clone()
+        self.path.lock().unwrap().clone()
+    }
+
+    pub fn reported(&self) -> bool {
+        self.reported.load(Ordering::Acquire)
     }
 }
 
@@ -82,7 +95,10 @@ impl Perform for WorkingDirectory {
         // Never resolve a relative report against the app's own cwd. Retain the
         // last valid filesystem directory when a shell visits Registry:, etc.
         if path.is_absolute() && path.is_dir() {
-            *self.0.lock().unwrap() = path;
+            *self.path.lock().unwrap() = path;
+            if !self.reported.swap(true, Ordering::AcqRel) {
+                crate::platform::trace_startup("shell_prompt");
+            }
         }
     }
 }
@@ -289,12 +305,15 @@ mod tests {
         let dir = root.join("한글 ; folder");
         std::fs::create_dir_all(&dir).unwrap();
         let mut cwd = WorkingDirectory::new(root.clone());
+        let shared = cwd.clone();
+        assert!(!shared.reported());
         let mut parser = Parser::new();
         let report = format!("\x1b]9;9;\"{}\"\x1b\\", dir.display());
         for byte in report.as_bytes() {
             parser.advance(&mut cwd, &[*byte]);
         }
         assert_eq!(cwd.get(), dir);
+        assert!(shared.reported());
         parser.advance(&mut cwd, b"\x1b]9;9;relative\x07\x1b]9;9;Registry:\x07");
         assert_eq!(cwd.get(), dir);
         let uri = url::Url::from_directory_path(&root).unwrap();

@@ -532,8 +532,10 @@ mod tests {
         let window = cx.add_window(|window, cx| {
             TerminalApp::new(
                 dir.clone(),
-                Settings::default(),
-                vec![profile.clone()],
+                Settings {
+                    profiles: vec![profile.clone()],
+                    ..Settings::default()
+                },
                 Startup::Default,
                 None,
                 window,

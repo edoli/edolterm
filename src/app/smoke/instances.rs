@@ -239,7 +239,7 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
         restored.read_with(cx, |app, _| app.tabs.len()) == expected,
         "multi-window tab restoration failed"
     );
-    restored.read_with(cx, |app, cx| {
+    let initial_sequence = restored.read_with(cx, |app, cx| {
         ensure!(
             app.active == expected_active,
             "restore changed the selected tab"
@@ -265,9 +265,8 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
                         .unwrap()
                         .read(cx)
                         .startup_sequence()
-                        .unwrap()
-                        > selected,
-                    "a background tab was enqueued before the selected tab"
+                        .is_none(),
+                    "a background shell started before the active prompt"
                 );
             }
         }
@@ -282,8 +281,35 @@ async fn exercise(cx: &mut AsyncApp, dir: &Path) -> Result<()> {
                 "pending restore changed tab order or working directory"
             );
         }
-        Ok::<_, anyhow::Error>(())
+        Ok::<_, anyhow::Error>(selected)
     })?;
+    let entry = entries(cx).last().unwrap().clone();
+    entry.handle.update(cx, |app, window, cx| {
+        if app.tabs.len() > 1 {
+            let next = (app.active + 1) % app.tabs.len();
+            app.activate(next, window, cx);
+            let terminal = app.active_terminal().unwrap();
+            assert!(
+                terminal.read(cx).startup_sequence().unwrap() > initial_sequence,
+                "selecting a waiting restored tab did not start it immediately"
+            );
+        }
+    })?;
+    let began = Instant::now();
+    while !restored.read_with(cx, |app, cx| {
+        app.tabs.iter().all(|tab| {
+            let terminal = tab.terminal.as_ref().unwrap().read(cx);
+            terminal.session.is_some() || terminal.error.is_some()
+        })
+    }) {
+        ensure!(
+            began.elapsed() < Duration::from_secs(10),
+            "background restore never resumed"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+    }
     profile_launches(cx, dir).await?;
     Ok(())
 }

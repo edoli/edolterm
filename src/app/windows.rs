@@ -16,7 +16,6 @@ pub(super) struct Entry {
 pub(super) struct Windows {
     pub entries: Vec<Entry>,
     pub dir: PathBuf,
-    detected: Vec<Profile>,
     geometry: SavedSession,
     sequence: u64,
     pub preserve_session: bool,
@@ -26,14 +25,10 @@ pub(super) struct Windows {
 }
 impl Global for Windows {}
 impl Windows {
-    pub fn detected_profiles(&self) -> &[Profile] {
-        &self.detected
-    }
-    pub fn new(dir: PathBuf, detected: Vec<Profile>, geometry: SavedSession) -> Self {
+    pub fn new(dir: PathBuf, geometry: SavedSession) -> Self {
         Self {
             entries: Vec::new(),
             dir,
-            detected,
             geometry,
             sequence: 0,
             preserve_session: false,
@@ -67,7 +62,6 @@ pub(super) fn open(
 ) -> anyhow::Result<Entity<TerminalApp>> {
     let registry = cx.global::<Windows>();
     let dir = registry.dir.clone();
-    let detected = registry.detected.clone();
     let settings = cx.global::<SharedSettings>().0.clone();
     let restore_size = size(
         px(if saved.width.is_finite() && saved.width >= 560. {
@@ -111,9 +105,10 @@ pub(super) fn open(
         ..Default::default()
     };
     let mut created = None;
+    platform::trace_startup("window_start");
     let handle = cx.open_window(options, |window, cx| {
-        let root =
-            cx.new(|cx| TerminalApp::new(dir, settings, detected, startup, error, window, cx));
+        platform::trace_startup("window_created");
+        let root = cx.new(|cx| TerminalApp::new(dir, settings, startup, error, window, cx));
         let weak = root.downgrade();
         window.on_window_should_close(cx, move |window, cx| {
             weak.update(cx, |this, cx| this.should_close(window, cx))
@@ -122,6 +117,7 @@ pub(super) fn open(
         created = Some((root.clone(), native_handle(window)));
         root
     })?;
+    platform::trace_startup("window_ready");
     let (root, hwnd) = created.expect("window constructor ran");
     let registry = cx.global_mut::<Windows>();
     registry.sequence = registry.sequence.saturating_add(1);
@@ -190,13 +186,10 @@ fn route_inner(
         .profile
         .as_ref()
         .map(|id| {
-            platform::merge_profiles(
-                cx.global::<Windows>().detected.clone(),
-                &cx.global::<SharedSettings>().0.profiles,
-            )
-            .into_iter()
-            .find(|profile| &profile.id == id)
-            .ok_or_else(|| format!("프로필을 찾을 수 없습니다: {id}"))
+            platform::configured_profiles(&cx.global::<SharedSettings>().0)
+                .into_iter()
+                .find(|profile| &profile.id == id)
+                .ok_or_else(|| format!("프로필을 찾을 수 없습니다: {id}"))
         })
         .transpose()?;
     let entries = cx.global::<Windows>().entries.clone();

@@ -197,6 +197,11 @@ pub(super) async fn run(
         root.update(cx, |app, _| app.status = None);
         // Only this explicit font action may start discovery. Type before its
         // asynchronous completion to ensure the query survives the result.
+        let scroll = root.read(cx).settings_scroll.clone();
+        let offset = scroll.offset().y + scroll.bounds().center().y
+            - font.read(cx).trigger_bounds().center().y;
+        scroll.set_offset(point(px(0.), offset.clamp(-scroll.max_offset().y, px(0.))));
+        draw(window, cx);
         let position = font.read(cx).trigger_bounds().center();
         click(position, window, cx);
         ensure!(
@@ -287,6 +292,75 @@ pub(super) async fn run(
             app.activate(active, window, cx);
             app.status = None;
         });
+        Ok(())
+    })??;
+    profile_search(root, handle, cx).await?;
+    Ok(())
+}
+
+async fn profile_search(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let original_active = root.read_with(cx, |app, _| app.active);
+    handle.update(cx, |_, window, cx| {
+        root.update(cx, |app, cx| app.settings_tab(window, cx));
+        draw(window, cx);
+        let size = root.read(cx).preferences.as_ref().unwrap().size.clone();
+        set_number(&size, "unsaved", window, cx);
+        root.update(cx, |app, cx| app.search_profiles(cx));
+        assert!(
+            cx.global::<super::super::preferences::ProfileSearch>()
+                .searching
+        );
+        // Repeated clicks/windows share the same in-flight operation.
+        root.update(cx, |app, cx| app.search_profiles(cx));
+    })?;
+    let began = Instant::now();
+    while cx.update(|cx| {
+        cx.global::<super::super::preferences::ProfileSearch>()
+            .searching
+    }) {
+        ensure!(
+            began.elapsed() < Duration::from_secs(15),
+            "manual profile search timed out"
+        );
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+    }
+    handle.update(cx, |_, window, cx| -> Result<()> {
+        let app = root.read(cx);
+        let saved = Settings::load(&app.dir)?;
+        ensure!(
+            !saved.discovered_profiles.is_empty(),
+            "manual search did not persist discoveries"
+        );
+        ensure!(
+            app.settings.discovered_profiles == saved.discovered_profiles,
+            "search not shared with the window"
+        );
+        let prefs = app.preferences.as_ref().unwrap();
+        ensure!(
+            prefs.size.read(cx).input.read(cx).text == "unsaved",
+            "search discarded unsaved settings input"
+        );
+        let values = prefs.profile.read(cx).visible_values();
+        ensure!(
+            saved
+                .discovered_profiles
+                .iter()
+                .all(|p| values.contains(&p.id)),
+            "profile selector did not update after search"
+        );
+        let size = prefs.size.clone();
+        let screenshot = app.dir.join("profile-search.png");
+        set_number(&size, "15", window, cx);
+        window.refresh();
+        window.draw(cx).clear(cx);
+        window.render_to_image()?.save(screenshot)?;
+        root.update(cx, |app, cx| app.activate(original_active, window, cx));
         Ok(())
     })??;
     Ok(())

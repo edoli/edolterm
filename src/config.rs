@@ -28,6 +28,9 @@ pub struct Settings {
     pub allow_osc52: bool,
     pub windowing_behavior: WindowingBehavior,
     pub profiles: Vec<Profile>,
+    /// Saved results of the first-run search or a refresh in preferences.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub discovered_profiles: Vec<Profile>,
     /// Per-action overrides. An empty list disables that action's shortcuts.
     pub keybindings: BTreeMap<String, Vec<String>>,
 }
@@ -52,6 +55,7 @@ impl Default for Settings {
             allow_osc52: false,
             windowing_behavior: WindowingBehavior::CurrentDesktop,
             profiles: Vec::new(),
+            discovered_profiles: Vec::new(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -127,16 +131,20 @@ impl Settings {
         if !matches!(self.theme.as_str(), "dark" | "light" | "system") {
             bail!("theme은 dark, light 또는 system이어야 합니다.");
         }
-        let mut ids = std::collections::HashSet::new();
-        for p in &self.profiles {
-            if p.id.trim().is_empty() || p.name.trim().is_empty() || p.program.trim().is_empty() {
-                bail!("프로필의 id, name, program은 비워둘 수 없습니다.");
-            }
-            if !ids.insert(&p.id) {
-                bail!("중복된 프로필 id: {}", p.id);
-            }
-            if p.program.contains('\0') || p.args.iter().any(|s| s.contains('\0')) {
-                bail!("실행 파일과 인자에는 NUL 문자를 사용할 수 없습니다.");
+        // Validate each list independently: user profiles may override discoveries.
+        for profiles in [&self.profiles, &self.discovered_profiles] {
+            let mut ids = std::collections::HashSet::new();
+            for p in profiles {
+                if p.id.trim().is_empty() || p.name.trim().is_empty() || p.program.trim().is_empty()
+                {
+                    bail!("프로필의 id, name, program은 비워둘 수 없습니다.");
+                }
+                if !ids.insert(&p.id) {
+                    bail!("중복된 프로필 id: {}", p.id);
+                }
+                if p.program.contains('\0') || p.args.iter().any(|s| s.contains('\0')) {
+                    bail!("실행 파일과 인자에는 NUL 문자를 사용할 수 없습니다.");
+                }
             }
         }
         Ok(())
@@ -245,6 +253,22 @@ impl SavedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn discoveries_round_trip_and_user_overrides_are_allowed() {
+        let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
+        assert!(legacy.discovered_profiles.is_empty());
+        let cached = Profile::new("pwsh", "Detected", "pwsh.exe", &["-NoLogo"]);
+        let mut settings = Settings {
+            discovered_profiles: vec![cached.clone()],
+            profiles: vec![Profile::new("pwsh", "Custom", "other.exe", &[])],
+            ..Settings::default()
+        };
+        settings.validate().unwrap();
+        let loaded: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(loaded, settings);
+        settings.discovered_profiles.push(cached);
+        assert!(settings.validate().is_err());
+    }
     #[test]
     fn saved_tab_titles_and_colors_are_optional_and_round_trip() {
         let legacy = r#"{"tabs":[{"profile_id":"shell","cwd":"."}]}"#;

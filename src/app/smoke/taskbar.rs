@@ -16,6 +16,16 @@ pub(super) fn probe(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut Ap
         let terminal = root.read(cx).active_terminal().expect("active shell");
         let terminal = terminal.read(cx);
         assert!(terminal.session.is_some() || terminal.error.is_some() || terminal.exited);
+        assert!(
+            terminal.error.is_some()
+                || terminal.exited
+                || terminal
+                    .session
+                    .as_ref()
+                    .is_some_and(|session| session.prompt_reported())
+                || began.elapsed() >= Duration::from_secs(3),
+            "Shell work started before prompt readiness or its fallback timeout"
+        );
         observed.set(true);
     });
     assert!(

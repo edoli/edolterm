@@ -28,8 +28,38 @@ pub enum TerminalEvent {
     Exited(bool),
 }
 
-struct SessionStarts(startup::Launcher);
+pub(crate) struct SessionStarts {
+    launcher: startup::Launcher,
+    #[cfg(windows)]
+    prestarted: Option<(Profile, Option<PathBuf>, startup::Pending)>,
+}
 impl Global for SessionStarts {}
+
+impl SessionStarts {
+    fn new() -> std::io::Result<Self> {
+        Ok(Self {
+            launcher: startup::Launcher::new()?,
+            #[cfg(windows)]
+            prestarted: None,
+        })
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn prestart(
+        profile: Profile,
+        cwd: Option<PathBuf>,
+        settings: Settings,
+    ) -> std::io::Result<Self> {
+        let mut starts = Self::new()?;
+        // Alacritty's Windows PTY does not use window_id. Output is buffered by
+        // the regular Session event loop until the first window connects it.
+        let pending = starts
+            .launcher
+            .start(profile.clone(), cwd.clone(), settings, 0, true);
+        starts.prestarted = Some((profile, cwd, pending));
+        Ok(starts)
+    }
+}
 
 enum PendingInput {
     Text(String),
@@ -183,8 +213,8 @@ impl TerminalView {
             return;
         }
         if cx.try_global::<SessionStarts>().is_none() {
-            match startup::Launcher::new() {
-                Ok(launcher) => cx.set_global(SessionStarts(launcher)),
+            match SessionStarts::new() {
+                Ok(starts) => cx.set_global(starts),
                 Err(error) => {
                     self.error = Some(format!("셸 시작 작업을 만들지 못했습니다: {error}"));
                     cx.notify();
@@ -197,12 +227,24 @@ impl TerminalView {
         #[cfg(windows)]
         let startup = if let Some(incoming) = incoming {
             let settings = self.settings.clone();
-            cx.global::<SessionStarts>().0.submit(
+            cx.global::<SessionStarts>().launcher.submit(
                 Box::new(move || Session::attach(incoming, &settings)),
                 selected,
             )
+        } else if selected
+            && cx
+                .global::<SessionStarts>()
+                .prestarted
+                .as_ref()
+                .is_some_and(|(profile, cwd, _)| profile == &self.profile && cwd == &self.cwd)
+        {
+            cx.global_mut::<SessionStarts>()
+                .prestarted
+                .take()
+                .unwrap()
+                .2
         } else {
-            cx.global::<SessionStarts>().0.start(
+            cx.global::<SessionStarts>().launcher.start(
                 self.profile.clone(),
                 self.cwd.clone(),
                 self.settings.clone(),
@@ -211,7 +253,7 @@ impl TerminalView {
             )
         };
         #[cfg(not(windows))]
-        let startup = cx.global::<SessionStarts>().0.start(
+        let startup = cx.global::<SessionStarts>().launcher.start(
             self.profile.clone(),
             self.cwd.clone(),
             self.settings.clone(),
@@ -239,6 +281,7 @@ impl TerminalView {
                             .set_options(term_config(&this.settings));
                         session.resize(this.grid_size);
                         this.session = Some(session);
+                        crate::platform::trace_startup("session_attached");
                         for input in std::mem::take(&mut this.pending_input) {
                             match input {
                                 PendingInput::Text(text) => this.input_text(text),

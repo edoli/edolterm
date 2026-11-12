@@ -121,6 +121,7 @@ impl Session {
         settings: &Settings,
         window_id: u64,
     ) -> Result<(Self, async_channel::Receiver<Event>)> {
+        crate::platform::trace_startup("session_start");
         let restore_cwd = cwd.filter(|path| path.is_dir());
         let cwd = restore_cwd
             .clone()
@@ -181,6 +182,7 @@ impl Session {
         let pty = tty::new(&options, size.into(), window_id);
         let pty =
             pty.with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
+        crate::platform::trace_startup("pty_ready");
         Self::connect(pty, terminal, proxy, pending, size, cwd, rx)
     }
 
@@ -259,6 +261,10 @@ impl Session {
 
     pub fn working_directory(&self) -> PathBuf {
         self.cwd.get()
+    }
+
+    pub fn prompt_reported(&self) -> bool {
+        self.cwd.reported()
     }
 
     pub fn win32_input_mode(&self) -> bool {

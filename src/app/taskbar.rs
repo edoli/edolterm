@@ -2,6 +2,7 @@
 use super::*;
 
 pub(super) const STARTUP_GRACE: Duration = Duration::from_millis(100);
+const PROMPT_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) fn start(root: WeakEntity<TerminalApp>, window: &Window) {
     after_startup(root, window, |cx| {
@@ -18,10 +19,7 @@ fn update(cx: &mut App) {
     if registry.preserve_session || registry.entries.is_empty() {
         return;
     }
-    let profiles = platform::merge_profiles(
-        registry.detected_profiles().to_vec(),
-        &cx.global::<windows::SharedSettings>().0.profiles,
-    );
+    let profiles = platform::configured_profiles(&cx.global::<windows::SharedSettings>().0);
     let images = crate::taskbar::update(&profiles, &registry.dir);
     icons::profiles::receive(images, cx);
 }
@@ -36,6 +34,7 @@ pub(super) fn after_startup(
     window.on_next_frame(move |window, _| {
         window.on_next_frame(move |_, cx| {
             cx.spawn(async move |cx| {
+                let began = Instant::now();
                 loop {
                     let starting = cx.update(|cx| {
                         root.upgrade().is_some_and(|root| {
@@ -43,8 +42,10 @@ pub(super) fn after_startup(
                             !app.closing
                                 && app.active_terminal().is_some_and(|terminal| {
                                     let terminal = terminal.read(cx);
-                                    terminal.session.is_none()
-                                        && terminal.error.is_none()
+                                    (terminal.session.as_ref().is_none_or(|session| {
+                                        !session.prompt_reported()
+                                            && began.elapsed() < PROMPT_TIMEOUT
+                                    })) && terminal.error.is_none()
                                         && !terminal.exited
                                 })
                         })
@@ -56,9 +57,12 @@ pub(super) fn after_startup(
                         .timer(Duration::from_millis(100))
                         .await;
                 }
-                // Leave breathing room for the shell's first output and prompt.
+                // Prefer an actual prompt report; shells without OSC integration
+                // release the gate after a bounded timeout. Keep a short grace
+                // after that point for output delivery and the next frame.
                 // No jump-list worker thread or icon I/O exists before this.
                 cx.background_executor().timer(STARTUP_GRACE).await;
+                platform::trace_startup("shell_work_start");
                 cx.update(ready);
             })
             .detach();

@@ -17,6 +17,7 @@ mod theme;
 mod update;
 
 fn main() {
+    platform::trace_startup("main");
     let options = match cli::Options::parse(std::env::args_os().skip(1)) {
         Ok(options) => options,
         Err(error) => {

@@ -1,6 +1,13 @@
 use super::*;
 use crate::select::{Choice, Select, Selected};
 
+#[derive(Default)]
+pub(super) struct ProfileSearch {
+    pub searching: bool,
+    pub message: Option<String>,
+}
+impl Global for ProfileSearch {}
+
 pub(super) struct Preferences {
     pub(super) profile: Entity<Select>,
     pub(super) behavior: Entity<Select>,
@@ -112,6 +119,12 @@ impl TerminalApp {
     pub(super) fn ensure_preferences(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.preferences.is_some() {
             return;
+        }
+        if !self.config_error
+            && !self.dir.join("settings.toml").exists()
+            && let Err(error) = self.settings.save(&self.dir)
+        {
+            self.status = Some(format!("설정 파일을 만들지 못했습니다: {error:#}"));
         }
         let selected_profile = self
             .profiles
@@ -265,6 +278,45 @@ impl TerminalApp {
         Ok(())
     }
 
+    pub(super) fn search_profiles(&mut self, cx: &mut Context<Self>) {
+        if cx.global::<ProfileSearch>().searching {
+            return;
+        }
+        if self.config_error {
+            self.status = Some("설정 파일 오류를 해결한 뒤 프로필을 검색해 주세요.".into());
+            cx.notify();
+            return;
+        }
+        cx.set_global(ProfileSearch {
+            searching: true,
+            message: Some("설치된 셸과 WSL 배포판을 검색하고 있습니다…".into()),
+        });
+        let dir = self.dir.clone();
+        cx.spawn(async move |_, cx| {
+            let found = cx
+                .background_executor()
+                .spawn(async { platform::discover_profiles() })
+                .await;
+            cx.update(|cx| {
+                let count = found.len();
+                let mut settings = cx.global::<windows::SharedSettings>().0.clone();
+                settings.discovered_profiles = found;
+                let message = match settings.save(&dir) {
+                    Ok(()) => {
+                        cx.set_global(windows::SharedSettings(settings));
+                        format!("{count}개 프로필을 찾아 저장했습니다.")
+                    }
+                    Err(error) => format!("검색 결과를 저장하지 못했습니다: {error:#}"),
+                };
+                cx.set_global(ProfileSearch {
+                    searching: false,
+                    message: Some(message),
+                });
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn general_settings_view(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let prefs = self
@@ -289,6 +341,10 @@ impl TerminalApp {
                 { content }
             })
             .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸입니다.", theme, selector(&prefs.profile)))
+            .child(setting("프로필 자동 검색", "시스템에 있는 쉘을 자동으로 검색해 저장된 목록을 갱신합니다.", theme,
+                settings_button("discover-profiles", if cx.global::<ProfileSearch>().searching { "검색 중…" } else { "프로필 검색" }, theme)
+                    .on_click(cx.listener(|this, _, _, cx| this.search_profiles(cx)))))
+            .when_some(cx.global::<ProfileSearch>().message.clone(), |content, message| content.child(div().px_5().text_size(px(12.)).text_color(theme.muted).child(message)))
             .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창입니다. 대상 창이 없으면 새 창을 만듭니다.", theme, selector(&prefs.behavior)))
             .child(setting("터미널 글꼴", "설치된 글꼴을 검색해 선택합니다. 터미널에는 고정폭 글꼴을 권장합니다.", theme, selector(&prefs.font)))
             .child(setting("글꼴 크기", "터미널의 글꼴 크기입니다. 8–48 px 사이로 설정합니다.", theme, number(&prefs.size)))

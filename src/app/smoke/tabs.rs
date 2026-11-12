@@ -372,7 +372,6 @@ pub(super) async fn rename(
             TerminalApp::new(
                 app.dir.clone(),
                 app.settings.clone(),
-                app.detected.clone(),
                 Startup::Restore(saved),
                 None,
                 window,

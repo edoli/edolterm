@@ -127,6 +127,11 @@ impl Select {
         self.refilter(cx);
     }
 
+    pub fn replace_choices(&mut self, items: Vec<Choice>, cx: &mut Context<Self>) {
+        self.set_items(items.into(), cx);
+        cx.notify();
+    }
+
     fn refilter(&mut self, cx: &App) {
         let query = self.search.read(cx).text.trim().to_lowercase();
         self.filtered = self
