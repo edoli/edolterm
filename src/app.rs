@@ -822,6 +822,10 @@ impl TerminalApp {
 
     fn key(&mut self, e: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let k = &e.keystroke;
+        #[cfg(windows)]
+        let shortcut_key = platform::keyboard::shortcut_keystroke(k);
+        #[cfg(windows)]
+        let k = &shortcut_key;
         let m = k.modifiers;
         #[cfg(windows)]
         if tab_transfer::active(cx) {

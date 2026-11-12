@@ -884,13 +884,17 @@ impl TerminalView {
         }
         cx.open_url(uri);
     }
+    pub(crate) fn adjust_font_size(&mut self, steps: i32) {
+        self.settings.font_size = (self.settings.font_size + steps as f32).clamp(8., 128.);
+    }
+
     fn scroll(&mut self, e: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         if self.settings.ctrl_scroll_zoom && links::activation(e.modifiers) {
             cx.stop_propagation();
             self.scroll_lines = ScrollLines::default();
             let steps = self.scroll_zoom.update(e);
             if steps != 0 {
-                self.settings.font_size = (self.settings.font_size + steps as f32).clamp(8., 128.);
+                self.adjust_font_size(steps);
                 cx.notify();
             }
             return;

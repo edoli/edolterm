@@ -20,6 +20,8 @@ impl Entry {
     }
 }
 pub(super) struct Windows {
+    #[cfg(windows)]
+    keyboard_hook: Option<platform::keyboard::MessageHook>,
     pub entries: Vec<Entry>,
     pub dir: PathBuf,
     geometry: SavedSession,
@@ -33,6 +35,8 @@ impl Global for Windows {}
 impl Windows {
     pub fn new(dir: PathBuf, geometry: SavedSession) -> Self {
         Self {
+            #[cfg(windows)]
+            keyboard_hook: None,
             entries: Vec::new(),
             dir,
             geometry,
@@ -125,6 +129,10 @@ pub(super) fn open(
     })?;
     platform::trace_startup("window_ready");
     let (root, hwnd) = created.expect("window constructor ran");
+    #[cfg(windows)]
+    if cx.global::<Windows>().keyboard_hook.is_none() {
+        cx.global_mut::<Windows>().keyboard_hook = Some(platform::keyboard::install()?);
+    }
     let registry = cx.global_mut::<Windows>();
     registry.sequence = registry.sequence.saturating_add(1);
     registry.entries.push(Entry {

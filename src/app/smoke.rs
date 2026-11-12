@@ -174,6 +174,12 @@ pub fn start(
         }
         #[cfg(all(feature = "ui-tests", windows))]
         if mode == "shortcuts" && failure.is_none()
+            && let Err(e) = shortcuts::native_font_keys(&root, handle, cx).await
+        {
+            failure = Some(format!("{e:#}"));
+        }
+        #[cfg(all(feature = "ui-tests", windows))]
+        if mode == "shortcuts" && failure.is_none()
             && let Err(e) = shortcuts::duplicate_tab(&root, handle, cx).await
         {
             failure = Some(format!("{e:#}"));

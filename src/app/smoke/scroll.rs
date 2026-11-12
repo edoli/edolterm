@@ -123,12 +123,19 @@ fn zoom(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> anyhow
         terminal.read(cx).settings.font_size == original.font_size,
         "Ctrl-wheel did not zoom out"
     );
-    for (size, delta) in [(48., 3.), (8., -3.)] {
+    for (size, delta, expected) in [
+        (48., 3., 49.),
+        (127.5, 3., 128.),
+        (128., 3., 128.),
+        (128., -3., 127.),
+        (8.5, -3., 8.),
+        (8., -3., 8.),
+    ] {
         terminal.update(cx, |view, _| view.settings.font_size = size);
         event.delta = ScrollDelta::Lines(point(0., delta));
         window.dispatch_event(PlatformInput::Scroll(event.clone()), cx);
         anyhow::ensure!(
-            terminal.read(cx).settings.font_size == size,
+            terminal.read(cx).settings.font_size == expected,
             "Ctrl-wheel exceeded font size bounds"
         );
     }

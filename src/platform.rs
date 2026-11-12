@@ -1,4 +1,8 @@
 //! OS integration is kept outside the terminal model and presentation.
+#[cfg(windows)]
+#[path = "platform/keyboard.rs"]
+pub(crate) mod keyboard;
+
 use crate::config::Profile;
 use std::{
     path::{Path, PathBuf},

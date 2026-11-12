@@ -323,14 +323,16 @@ pub const DEFINITIONS: &[Definition] = &[
         "글꼴 크기 늘리기",
         "화면",
         Action::IncreaseFont,
-        "ctrl-+"
+        "ctrl-=",
+        "ctrl-numpad_plus"
     ),
     binding!(
         "decreaseFontSize",
         "글꼴 크기 줄이기",
         "화면",
         Action::DecreaseFont,
-        "ctrl--"
+        "ctrl--",
+        "ctrl-numpad_minus"
     ),
     binding!(
         "resetFontSize",
@@ -379,6 +381,8 @@ pub fn parse(text: &str) -> Result<Keystroke> {
                 | "pageup"
                 | "pagedown"
                 | "menu"
+                | "numpad_plus"
+                | "numpad_minus"
         )
         || name
             .strip_prefix('f')
@@ -433,6 +437,8 @@ pub fn label(text: &str) -> String {
         "right" => "Right".into(),
         "home" => "Home".into(),
         "end" => "End".into(),
+        "numpad_plus" => "Numpad +".into(),
+        "numpad_minus" => "Numpad -".into(),
         name => name.to_uppercase(),
     };
     parts.push(name);
@@ -548,5 +554,49 @@ mod tests {
         assert!(Bindings::new(&Overrides::from([("splitPane".into(), vec![])])).is_err());
         assert!(parse("ctrl-nonsense").is_err());
         assert!(parse("ctrl").is_err());
+    }
+
+    #[test]
+    fn font_shortcuts_distinguish_main_keyboard_and_keypad() {
+        let bindings = Bindings::new(&Overrides::new()).unwrap();
+        for (key, expected) in [
+            ("ctrl-=", Some(Action::IncreaseFont)),
+            ("ctrl-numpad_plus", Some(Action::IncreaseFont)),
+            ("ctrl--", Some(Action::DecreaseFont)),
+            ("ctrl-numpad_minus", Some(Action::DecreaseFont)),
+            ("ctrl-+", None),
+            ("ctrl-shift-=", None),
+            ("ctrl-shift-numpad_plus", None),
+            ("ctrl-shift-numpad_minus", None),
+        ] {
+            assert_eq!(
+                bindings.action(&parse(key).unwrap(), &DummyKeyboardMapper),
+                expected,
+                "{key}"
+            );
+        }
+        assert_eq!(label("ctrl-numpad_plus"), "Ctrl+Numpad +");
+        assert_eq!(label("ctrl-numpad_minus"), "Ctrl+Numpad -");
+
+        let overrides = Overrides::from([
+            ("increaseFontSize".into(), vec!["ctrl-numpad_plus".into()]),
+            ("decreaseFontSize".into(), vec!["ctrl-numpad_minus".into()]),
+            ("newTab".into(), vec!["ctrl-=".into(), "ctrl--".into()]),
+        ]);
+        let restored = toml::from_str(&toml::to_string(&overrides).unwrap()).unwrap();
+        let bindings = Bindings::new(&restored).unwrap();
+        bindings.validate_layout(&DummyKeyboardMapper).unwrap();
+        for (key, expected) in [
+            ("ctrl-=", Action::NewTab),
+            ("ctrl--", Action::NewTab),
+            ("ctrl-numpad_plus", Action::IncreaseFont),
+            ("ctrl-numpad_minus", Action::DecreaseFont),
+        ] {
+            assert_eq!(
+                bindings.action(&parse(key).unwrap(), &DummyKeyboardMapper),
+                Some(expected),
+                "{key}"
+            );
+        }
     }
 }

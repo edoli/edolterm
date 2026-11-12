@@ -6,6 +6,81 @@ use alacritty_terminal::{
 };
 use anyhow::{Result, ensure};
 
+#[cfg(windows)]
+pub(super) async fn native_font_keys(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    use windows_sys::Win32::UI::{
+        Input::KeyboardAndMouse::{
+            GetKeyboardState, MAPVK_VK_TO_VSC, MapVirtualKeyW, SetKeyboardState, VK_ADD,
+            VK_CONTROL, VK_LCONTROL, VK_OEM_MINUS, VK_OEM_PLUS, VK_SUBTRACT,
+        },
+        WindowsAndMessaging::{PostMessageW, WM_KEYDOWN, WM_KEYUP},
+    };
+    struct RestoreKeyboard([u8; 256]);
+    impl Drop for RestoreKeyboard {
+        fn drop(&mut self) {
+            unsafe { SetKeyboardState(self.0.as_ptr()) };
+        }
+    }
+    let (hwnd, terminal) = handle.update(cx, |_, window, cx| {
+        let terminal = root.read(cx).active_terminal().unwrap();
+        let focus = terminal.read(cx).focus.clone();
+        focus.focus(window, cx);
+        window.refresh();
+        window.draw(cx).clear(cx);
+        (super::super::windows::native_handle(window), terminal)
+    })?;
+    let original_size = terminal.read_with(cx, |view, _| view.settings.font_size);
+    let mut saved = [0; 256];
+    ensure!(
+        unsafe { GetKeyboardState(saved.as_mut_ptr()) } != 0,
+        "read native keyboard state"
+    );
+    let _restore = RestoreKeyboard(saved);
+    let mut control = [0; 256];
+    control[VK_CONTROL as usize] = 0x80;
+    control[VK_LCONTROL as usize] = 0x80;
+    for (vk, delta) in [
+        (VK_ADD, 1.),
+        (VK_SUBTRACT, -1.),
+        (VK_OEM_PLUS, 1.),
+        (VK_OEM_MINUS, -1.),
+    ] {
+        let before = terminal.read_with(cx, |view, _| view.settings.font_size);
+        ensure!(
+            unsafe { SetKeyboardState(control.as_ptr()) } != 0,
+            "set test keyboard state"
+        );
+        let scan = unsafe { MapVirtualKeyW(vk as u32, MAPVK_VK_TO_VSC) } as isize;
+        unsafe {
+            PostMessageW(hwnd as _, WM_KEYDOWN, vk as usize, 1 | (scan << 16));
+            PostMessageW(
+                hwnd as _,
+                WM_KEYUP,
+                vk as usize,
+                1 | (scan << 16) | (3 << 30),
+            );
+        }
+        cx.background_executor()
+            .timer(Duration::from_millis(50))
+            .await;
+        let after = terminal.read_with(cx, |view, _| view.settings.font_size);
+        ensure!(
+            after == before + delta,
+            "native Ctrl+VK {vk:#x}: expected {}, got {after}",
+            before + delta
+        );
+    }
+    ensure!(
+        terminal.read_with(cx, |view, _| view.settings.font_size) == original_size,
+        "native font reset"
+    );
+    Ok(())
+}
+
 fn press(name: &'static str, window: &mut Window, cx: &mut App) -> Result<()> {
     let key = Keystroke::parse(name)?;
     window.dispatch_keystroke(key.clone(), cx);
@@ -43,7 +118,7 @@ fn exercise(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Re
     ensure!(!root.read(cx).menu, "close dropdown");
 
     let original_size = terminal.read(cx).settings.font_size;
-    press("ctrl-+", window, cx)?;
+    press("ctrl-=", window, cx)?;
     ensure!(
         terminal.read(cx).settings.font_size == original_size + 1.,
         "increase font"
@@ -53,7 +128,33 @@ fn exercise(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Re
         terminal.read(cx).settings.font_size == original_size,
         "decrease font"
     );
+    press("ctrl-numpad_plus", window, cx)?;
+    press("ctrl-numpad_minus", window, cx)?;
+    ensure!(
+        terminal.read(cx).settings.font_size == original_size,
+        "keypad font shortcuts"
+    );
     press("ctrl-+", window, cx)?;
+    ensure!(
+        terminal.read(cx).settings.font_size == original_size,
+        "Ctrl+Shift+= must not use the Ctrl+= binding"
+    );
+    for (size, key, expected) in [
+        (48., "ctrl-=", 49.),
+        (100., "ctrl--", 99.),
+        (127.5, "ctrl-=", 128.),
+        (128., "ctrl-numpad_plus", 128.),
+        (128., "ctrl--", 127.),
+        (8.5, "ctrl-numpad_minus", 8.),
+        (8., "ctrl--", 8.),
+    ] {
+        terminal.update(cx, |view, _| view.settings.font_size = size);
+        press(key, window, cx)?;
+        ensure!(
+            terminal.read(cx).settings.font_size == expected,
+            "font shortcut bounds: {size} {key}"
+        );
+    }
     press("ctrl-0", window, cx)?;
     ensure!(
         terminal.read(cx).settings.font_size == original_size,

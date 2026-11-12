@@ -127,12 +127,8 @@ impl TerminalApp {
                             };
                             session.terminal.lock().scroll_display(scroll);
                         }
-                        Action::IncreaseFont => {
-                            view.settings.font_size = (view.settings.font_size + 1.).min(48.)
-                        }
-                        Action::DecreaseFont => {
-                            view.settings.font_size = (view.settings.font_size - 1.).max(8.)
-                        }
+                        Action::IncreaseFont => view.adjust_font_size(1),
+                        Action::DecreaseFont => view.adjust_font_size(-1),
                         Action::ResetFont => view.settings.font_size = self.settings.font_size,
                         _ => return false,
                     }
