@@ -21,13 +21,14 @@ mod shortcuts;
 mod tabs;
 #[cfg(feature = "ui-tests")]
 mod taskbar;
+#[cfg(feature = "ui-tests")]
+mod updates;
 
 pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
-        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links" => {
-            mode
-        }
+        | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links"
+        | "updates" | "updates-preview" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -43,6 +44,13 @@ pub fn start(
     window: &mut Window,
     cx: &mut App,
 ) {
+    #[cfg(feature = "ui-tests")]
+    if mode == "updates-preview" {
+        if let Err(error) = updates::preview(&root, window, cx) {
+            eprintln!("Update preview: {error:#}");
+        }
+        return;
+    }
     #[cfg(all(feature = "ui-tests", windows))]
     if mode == "instances" {
         instances::start(root, cx);
@@ -145,6 +153,12 @@ pub fn start(
             cx.background_executor().timer(Duration::from_millis(100)).await;
         }
         if !output_ok && failure.is_none() { failure = Some("Unicode PTY output timed out".into()); }
+        #[cfg(feature = "ui-tests")]
+        if mode == "updates" && failure.is_none()
+            && let Err(error) = updates::run(&root, handle, cx).await
+        {
+            failure = Some(format!("{error:#}"));
+        }
         #[cfg(feature = "ui-tests")]
         if mode == "settings" && failure.is_none()
             && let Err(e) = settings_controls::run(&root, handle, cx).await

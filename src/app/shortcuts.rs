@@ -271,6 +271,14 @@ impl TerminalApp {
                 .enumerate()
                 .map(|(index, (page, label))| {
                     button(("settings-page", index), label, theme)
+                        .when(
+                            page == SettingsPage::Behavior && self.has_update(cx),
+                            |button| {
+                                button
+                                    .aria_label("동작 · 업데이트 있음")
+                                    .child(update_dot(theme).ml_2())
+                            },
+                        )
                         .justify_start()
                         .px_3()
                         .py_2()

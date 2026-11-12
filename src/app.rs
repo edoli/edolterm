@@ -20,6 +20,7 @@ mod smoke;
 mod tab_menu;
 mod tabs;
 mod taskbar;
+mod updates;
 mod windows;
 use config::shortcuts::{self as keybindings, Bindings};
 use shortcuts::SettingsPage;
@@ -112,8 +113,18 @@ impl TerminalApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let update_state = cx.default_global::<updates::Checks>().state.clone();
         let search = cx.new(|cx| TextField::new("", "터미널에서 찾기", cx));
         let subscriptions = vec![
+            cx.observe_global::<updates::Checks>(|this, cx| {
+                if !matches!(
+                    this.update_state,
+                    crate::update::State::Installing | crate::update::State::Ready
+                ) {
+                    this.update_state = cx.global::<updates::Checks>().state.clone();
+                    cx.notify();
+                }
+            }),
             cx.observe_global::<preferences::ProfileSearch>(|_, cx| cx.notify()),
             cx.subscribe_in(
                 &search,
@@ -222,9 +233,13 @@ impl TerminalApp {
             settings_page: SettingsPage::Behavior,
             shortcut_capture: None,
             shortcut_bindings,
-            update_state: crate::update::read_result(&dir)
-                .map(crate::update::State::Failed)
-                .unwrap_or_default(),
+            update_state: if matches!(update_state, crate::update::State::Unchecked) {
+                crate::update::read_result(&dir)
+                    .map(crate::update::State::Failed)
+                    .unwrap_or(update_state)
+            } else {
+                update_state
+            },
             #[cfg(windows)]
             update_handoff: None,
             apply_update: false,
@@ -1049,12 +1064,23 @@ impl TerminalApp {
             )
             .child(
                 icon_button("profiles", Icon::ChevronDown, "프로필 및 설정", theme)
+                    .relative()
+                    .when(self.has_update(cx), |button| {
+                        button
+                            .aria_label("프로필 및 설정 · 업데이트 있음")
+                            .child(update_dot(theme).absolute().top(px(5.)).right(px(5.)))
+                    })
                     .cursor_default()
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
                     .tooltip(tip(format!(
-                        "프로필 및 설정 · {}",
+                        "프로필 및 설정{} · {}",
+                        if self.has_update(cx) {
+                            " · 업데이트 있음"
+                        } else {
+                            ""
+                        },
                         self.shortcut_label(keybindings::Action::ProfileMenu)
                     )))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -1205,19 +1231,33 @@ impl TerminalApp {
                     .hover(|s| s.bg(theme.hover))
                     .child(icon(Icon::Settings, 16.))
                     .child(div().flex_1().child("설정"))
+                    .when(self.has_update(cx), |row| {
+                        row.child(
+                            div()
+                                .text_size(px(11.))
+                                .text_color(theme.accent)
+                                .child("업데이트"),
+                        )
+                    })
                     .child(
                         div()
                             .text_size(px(11.))
                             .text_color(theme.muted)
                             .child(self.shortcut_label(keybindings::Action::Settings)),
                     )
-                    .on_click(cx.listener(|this, _, window, cx| this.settings_tab(window, cx))),
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if this.has_update(cx) {
+                            this.settings_page = SettingsPage::Behavior;
+                            this.settings_scroll.set_offset(point(px(0.), px(0.)));
+                        }
+                        this.settings_tab(window, cx);
+                    })),
             )
             .into_any_element()
     }
 
     fn check_update(&mut self, cx: &mut Context<Self>) {
-        if self.update_state.is_busy() || self.closing {
+        if self.update_state.is_busy() || self.closing || !updates::check(cx) {
             return;
         }
         #[cfg(windows)]
@@ -1225,23 +1265,22 @@ impl TerminalApp {
             self.update_handoff = None;
         }
         self.update_state = crate::update::State::Checking;
-        let task = cx
-            .background_executor()
-            .spawn(async { crate::update::check() });
-        cx.spawn(async move |this, cx| {
-            let result = task.await;
-            let _ = this.update(cx, |this, cx| {
-                this.update_state =
-                    result.unwrap_or_else(|error| crate::update::State::Failed(error.to_string()));
-                cx.notify();
-            });
-        })
-        .detach();
         cx.notify();
+    }
+
+    fn has_update(&self, cx: &App) -> bool {
+        self.update_state.has_update() || cx.global::<updates::Checks>().state.has_update()
     }
 
     #[cfg(windows)]
     fn download_update(&mut self, cx: &mut Context<Self>) {
+        #[cfg(debug_assertions)]
+        if cx.global::<updates::Checks>().preview {
+            self.status =
+                Some("업데이트 UI 미리보기입니다. 실제 다운로드·설치는 실행하지 않습니다.".into());
+            cx.notify();
+            return;
+        }
         let crate::update::State::Available(release) = self.update_state.clone() else {
             return;
         };
@@ -1300,6 +1339,9 @@ impl TerminalApp {
             .child(
                 div()
                     .id("update-status")
+                    .when(self.has_update(cx), |status| {
+                        status.text_color(theme.accent)
+                    })
                     .flex_1()
                     .min_w_0()
                     .whitespace_nowrap()
@@ -1317,12 +1359,12 @@ impl TerminalApp {
         #[cfg(windows)]
         if matches!(self.update_state, State::Available(_)) {
             row = row.child(
-                settings_button("download-update", "업데이트 다운로드", theme)
+                primary_settings_button("download-update", "업데이트 다운로드", theme)
                     .on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
             );
         } else if matches!(self.update_state, State::Ready) {
             row = row.child(
-                settings_button("apply-update", "다시 시작하여 업데이트", theme).on_click(
+                primary_settings_button("apply-update", "다시 시작하여 업데이트", theme).on_click(
                     cx.listener(|this, _, window, cx| {
                         this.apply_update = true;
                         this.should_close(window, cx);
@@ -1332,6 +1374,14 @@ impl TerminalApp {
         }
         row.into_any_element()
     }
+}
+
+fn update_dot(theme: Theme) -> Div {
+    div()
+        .size(px(6.))
+        .flex_shrink_0()
+        .rounded_full()
+        .bg(theme.accent)
 }
 
 fn button(id: impl Into<ElementId>, label: impl Into<SharedString>, theme: Theme) -> Stateful<Div> {
@@ -2014,7 +2064,10 @@ pub fn run(launch_options: crate::cli::Options) {
             let _ = handles[active].update(cx, |_, window, _| window.activate_window());
             if update_taskbar {
                 let root = cx.global::<windows::Windows>().entries[active].root.clone();
-                let _ = handles[active].update(cx, |_, window, _| taskbar::start(root, window));
+                let _ = handles[active].update(cx, |_, window, _| {
+                    taskbar::start(root.clone(), window);
+                    updates::schedule(root, window);
+                });
             }
             #[cfg(debug_assertions)]
             if let Some(mode) = smoke_mode {

@@ -138,6 +138,10 @@ pub enum State {
 }
 
 impl State {
+    pub fn has_update(&self) -> bool {
+        matches!(self, Self::Available(_) | Self::Installing | Self::Ready)
+    }
+
     pub fn is_busy(&self) -> bool {
         matches!(self, Self::Checking | Self::Installing)
     }
@@ -312,6 +316,28 @@ pub fn read_result(config: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_only_marks_known_updates() {
+        let release = Release {
+            version: "99.0.0".into(),
+            size: 1024,
+            sha256: "ab".repeat(32),
+            asset_name: "edolterm-windows.zip".into(),
+        };
+        for state in [State::Available(release), State::Installing, State::Ready] {
+            assert!(state.has_update());
+        }
+        for state in [
+            State::Unchecked,
+            State::Checking,
+            State::Current,
+            State::NoRelease,
+            State::Failed("offline".into()),
+        ] {
+            assert!(!state.has_update());
+        }
+    }
+
     #[test]
     #[ignore = "uses the public GitHub API"]
     fn live_github_release_check() {
