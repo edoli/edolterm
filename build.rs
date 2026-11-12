@@ -1,4 +1,80 @@
-use std::{env, fs, path::PathBuf};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
+
+fn bundle_windows_runtime(out_dir: &Path) {
+    // OUT_DIR is <target>/<profile>/build/<package>/out, including custom
+    // target directories and cross-compilation's extra target-triple component.
+    let profile_dir = out_dir.ancestors().nth(3).expect("Cargo profile directory");
+    let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let script = manifest_dir.join("scripts/bundle-windows.ps1");
+    let architecture = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+        "x86_64" => "x64",
+        "x86" => "x86",
+        "aarch64" => "arm64",
+        arch => panic!("unsupported ConPTY architecture: {arch}"),
+    };
+    println!("cargo:rerun-if-changed={}", script.display());
+    let mut command = Command::new("powershell.exe");
+    // A parent PowerShell 7 session can export its own PSModulePath, which
+    // hides Windows PowerShell's built-in hashing/archive modules.
+    command.env_remove("PSModulePath");
+    command
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(&script)
+        .arg("-OutputDir")
+        .arg(profile_dir)
+        .arg("-Architecture")
+        .arg(architecture)
+        .arg("-RuntimeOnly");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = command
+        .output()
+        .expect("failed to prepare the bundled ConPTY runtime");
+    assert!(
+        output.status.success(),
+        "ConPTY runtime preparation failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Tests and examples load DLLs relative to their own executable, too.
+    for directory in [
+        profile_dir.to_path_buf(),
+        profile_dir.join("deps"),
+        profile_dir.join("examples"),
+    ] {
+        fs::create_dir_all(&directory).expect("create ConPTY runtime directory");
+        for name in ["conpty.dll", "OpenConsole.exe"] {
+            let source = profile_dir.join(name);
+            let destination = directory.join(name);
+            if source != destination
+                && fs::read(&destination).ok()
+                    != Some(fs::read(&source).expect("read ConPTY runtime"))
+            {
+                fs::copy(&source, &destination).unwrap_or_else(|error| {
+                    panic!("failed to copy {}: {error}", destination.display())
+                });
+            }
+            // Restore missing runtime files on the next cargo build/run even
+            // when the Rust sources have not changed.
+            println!("cargo:rerun-if-changed={}", destination.display());
+        }
+    }
+}
 
 fn main() {
     println!("cargo:rerun-if-changed=Cargo.toml");
@@ -33,6 +109,7 @@ fn main() {
     }
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must set OUT_DIR"));
+    bundle_windows_runtime(&out_dir);
     let svg = fs::read(SOURCE).expect("failed to read the app icon SVG");
     let tree = resvg::usvg::Tree::from_data(&svg, &resvg::usvg::Options::default())
         .expect("failed to parse the app icon SVG");

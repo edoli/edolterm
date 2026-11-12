@@ -1,6 +1,7 @@
 ﻿param(
     [string]$OutputDir = 'target/release',
     [ValidateSet('release', 'release-dist')][string]$Profile = 'release',
+    [ValidateSet('x64', 'x86', 'arm64')][string]$Architecture = 'x64',
     [switch]$RuntimeOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -24,12 +25,16 @@ if (-not (Test-Path -LiteralPath $archive)) {
 }
 if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expectedHash) { throw 'ConPTY package hash mismatch' }
 Expand-Archive -LiteralPath $archive -DestinationPath $packageDir -Force
-$destination = Join-Path $projectDir $OutputDir
+$destination = if ([IO.Path]::IsPathRooted($OutputDir)) {
+    [IO.Path]::GetFullPath($OutputDir)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $projectDir $OutputDir))
+}
 [IO.Directory]::CreateDirectory($destination) | Out-Null
-Copy-BundleFile (Join-Path $packageDir 'runtimes/win-x64/native/conpty.dll') (Join-Path $destination 'conpty.dll')
+Copy-BundleFile (Join-Path $packageDir "runtimes/win-$Architecture/native/conpty.dll") (Join-Path $destination 'conpty.dll')
 # Alacritty 0.26 uses the compatibility CreatePseudoConsole exports, which
 # resolve OpenConsole.exe next to conpty.dll (verified in the integration runs).
-Copy-BundleFile (Join-Path $packageDir 'build/native/runtimes/x64/OpenConsole.exe') (Join-Path $destination 'OpenConsole.exe')
+Copy-BundleFile (Join-Path $packageDir "build/native/runtimes/$Architecture/OpenConsole.exe") (Join-Path $destination 'OpenConsole.exe')
 if ($RuntimeOnly) {
     Write-Output "ConPTY runtime: $destination"
     return
