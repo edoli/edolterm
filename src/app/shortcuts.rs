@@ -218,8 +218,7 @@ impl TerminalApp {
         }
     }
 
-    pub(super) fn shortcuts_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::from_setting(&self.settings.theme, cx);
+    pub(super) fn shortcuts_content(&self, theme: Theme, cx: &mut Context<Self>) -> Div {
         let mut rows = div().flex().flex_col().gap_1();
         let mut group = "";
         for (row, definition) in DEFINITIONS.iter().enumerate() {
@@ -362,25 +361,9 @@ impl TerminalApp {
                     .child(chips),
             );
         }
-        let content = div().w_full().max_w(px(1000.)).mx_auto().p_8()
-            .child(div().text_size(px(25.)).font_weight(FontWeight::BOLD).child("단축키"))
-            .child(div().pt_2().text_color(theme.muted).child("Windows Terminal의 기본 키를 사용합니다. 구현된 기능만 표시됩니다."))
-            .child(div().pt_2().text_color(theme.muted).text_size(px(12.)).child("키를 클릭해 변경하거나 ‘+ 추가’를 누른 뒤 키 조합을 누르세요. Esc는 입력 취소입니다."))
-            .child(div().pt_2().text_color(theme.muted).text_size(px(12.)).child("Enter 복사는 터미널에 선택 영역이 있을 때만 작동합니다. 글꼴 크기 단축키는 현재 탭에 적용됩니다."))
-            .child(rows);
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .child(self.settings_scroll_area(
-                "shortcuts-scroll",
-                &self.shortcuts_scroll,
-                content,
-                theme,
-                cx,
-            ))
-            .into_any_element()
+        div().flex().flex_col().gap_2()
+            .child(div().text_color(theme.muted).text_size(px(12.)).child("키를 클릭해 변경하거나 ‘+ 추가’를 누른 뒤 키 조합을 누르세요. Esc는 입력 취소입니다."))
+            .child(div().text_color(theme.muted).text_size(px(12.)).child("Enter 복사는 터미널에 선택 영역이 있을 때만 작동합니다. 글꼴 크기 단축키는 현재 탭에 적용됩니다."))
+            .child(rows)
     }
 }

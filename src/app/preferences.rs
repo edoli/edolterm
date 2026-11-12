@@ -10,6 +10,53 @@ pub(super) enum SettingsPage {
     Shortcuts,
 }
 
+impl SettingsPage {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Behavior => "동작",
+            Self::Appearance => "모양",
+            Self::Profiles => "프로필",
+            Self::Shortcuts => "단축키",
+        }
+    }
+
+    fn description(self) -> &'static str {
+        match self {
+            Self::Shortcuts => "Windows Terminal의 기본 키를 사용합니다. 구현된 기능만 표시됩니다.",
+            _ => "설정은 저장하면 열린 터미널에도 적용됩니다.",
+        }
+    }
+}
+
+fn settings_page_header(page: SettingsPage, theme: Theme) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .mb_4()
+        .child(
+            div()
+                .mb_1()
+                .text_size(px(25.))
+                .font_weight(FontWeight::BOLD)
+                .child(page.label()),
+        )
+        .child(div().text_color(theme.muted).child(page.description()))
+}
+
+fn settings_page_content(page: SettingsPage, theme: Theme, body: Div) -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap_2()
+        .w_full()
+        .max_w(px(1200.))
+        .mx_auto()
+        .p_6()
+        .child(settings_page_header(page, theme))
+        .child(body)
+}
+
 #[derive(Default)]
 pub(super) struct ProfileSearch {
     pub searching: bool,
@@ -145,15 +192,15 @@ impl TerminalApp {
             )
             .children(
                 [
-                    (SettingsPage::Behavior, "동작"),
-                    (SettingsPage::Appearance, "모양"),
-                    (SettingsPage::Profiles, "프로필"),
-                    (SettingsPage::Shortcuts, "단축키"),
+                    SettingsPage::Behavior,
+                    SettingsPage::Appearance,
+                    SettingsPage::Profiles,
+                    SettingsPage::Shortcuts,
                 ]
                 .into_iter()
                 .enumerate()
-                .map(|(index, (page, label))| {
-                    button(("settings-page", index), label, theme)
+                .map(|(index, page)| {
+                    button(("settings-page", index), page.label(), theme)
                         .when(
                             page == SettingsPage::Behavior && self.has_update(cx),
                             |button| {
@@ -180,12 +227,27 @@ impl TerminalApp {
                         }))
                 }),
             );
-        let content = match self.settings_page {
-            SettingsPage::Behavior | SettingsPage::Appearance | SettingsPage::Profiles => {
-                self.preferences_view(cx)
-            }
-            SettingsPage::Shortcuts => self.shortcuts_view(cx),
+        let (body, scroll_id, scroll) = match self.settings_page {
+            SettingsPage::Behavior | SettingsPage::Appearance | SettingsPage::Profiles => (
+                self.preferences_content(theme, cx),
+                "settings-scroll",
+                &self.settings_scroll,
+            ),
+            SettingsPage::Shortcuts => (
+                self.shortcuts_content(theme, cx),
+                "shortcuts-scroll",
+                &self.shortcuts_scroll,
+            ),
         };
+        let content = self
+            .settings_scroll_area(
+                scroll_id,
+                scroll,
+                settings_page_content(self.settings_page, theme, body),
+                theme,
+                cx,
+            )
+            .min_w_0();
         div()
             .flex()
             .flex_col()
@@ -420,8 +482,7 @@ impl TerminalApp {
         .detach();
     }
 
-    fn preferences_view(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = Theme::from_setting(&self.settings.theme, cx);
+    fn preferences_content(&self, theme: Theme, cx: &mut Context<Self>) -> Div {
         let prefs = self
             .preferences
             .as_ref()
@@ -430,34 +491,8 @@ impl TerminalApp {
         let number = |entity: &Entity<NumberInput>| {
             div().w_full().flex().justify_end().child(entity.clone())
         };
-        let title = match self.settings_page {
-            SettingsPage::Behavior => "동작",
-            SettingsPage::Appearance => "모양",
-            SettingsPage::Profiles => "프로필",
-            SettingsPage::Shortcuts => unreachable!(),
-        };
-        let content = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .w_full()
-            .max_w(px(1200.))
-            .mx_auto()
-            .p_6()
-            .child(
-                div()
-                    .mb_1()
-                    .text_size(px(25.))
-                    .font_weight(FontWeight::BOLD)
-                    .child(title),
-            )
-            .child(
-                div()
-                    .mb_4()
-                    .text_color(theme.muted)
-                    .child("설정은 저장하면 열린 터미널에도 적용됩니다."),
-            );
-        let content = match self.settings_page {
+        let content = div().flex().flex_col().gap_2();
+        match self.settings_page {
             SettingsPage::Behavior => content
                 .child(self.update_view(theme, cx))
                 .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸입니다.", theme, self.draft.default_profile != self.settings.default_profile, selector(&prefs.profile)))
@@ -495,21 +530,7 @@ impl TerminalApp {
                 .child(div().text_color(theme.description).child("하단의 ‘설정 파일 열기’로 파일을 열고 [[profiles]]에 실행 파일, 인자, 시작 폴더, 환경변수를 추가할 수 있습니다. 편집한 뒤 ‘설정 다시 불러오기’를 누르세요."))
                 .child(div().mt_2().text_size(px(12.)).text_color(theme.muted).child(self.dir.join("settings.toml").display().to_string())),
             SettingsPage::Shortcuts => unreachable!(),
-        };
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_w_0()
-            .min_h_0()
-            .child(self.settings_scroll_area(
-                "settings-scroll",
-                &self.settings_scroll,
-                content,
-                theme,
-                cx,
-            ))
-            .into_any_element()
+        }
     }
 
     pub(super) fn open_settings_file(&mut self, cx: &mut Context<Self>) {
