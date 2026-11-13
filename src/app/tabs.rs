@@ -197,7 +197,13 @@ impl TerminalApp {
     }
 
     pub(super) fn tab_inset() -> f32 {
-        if cfg!(target_os = "macos") { 78. } else { 0. }
+        if cfg!(target_os = "macos") {
+            78.
+        } else if platform::is_elevated() {
+            32.
+        } else {
+            0.
+        }
     }
 
     pub(super) fn begin_tab_drag(

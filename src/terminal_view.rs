@@ -21,6 +21,7 @@ mod file_drop;
 mod layout;
 mod links;
 mod scroll;
+mod title;
 use scroll::{ScrollLines, ScrollZoom};
 
 pub enum TerminalEvent {
@@ -488,18 +489,7 @@ impl TerminalView {
                 }
             }
             Event::Title(title) => {
-                self.title = if title
-                    .trim_matches('"')
-                    .eq_ignore_ascii_case(self.profile.program.trim_matches('"'))
-                {
-                    self.profile.name.clone()
-                } else {
-                    title
-                        .chars()
-                        .filter(|c| !c.is_control())
-                        .take(256)
-                        .collect()
-                };
+                self.title = title::display(&title);
                 cx.emit(TerminalEvent::Metadata);
             }
             Event::ResetTitle => {

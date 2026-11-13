@@ -47,8 +47,9 @@ pub fn new(
     options: &tty::Options,
     size: WindowSize,
     window_id: u64,
+    title: &str,
 ) -> io::Result<LevelTriggeredPty<tty::Pty>> {
-    tty::new(options, size, window_id).map(LevelTriggeredPty::wrap)
+    tty::windows::new_with_title(options, size, window_id, title).map(LevelTriggeredPty::wrap)
 }
 
 impl<T: EventedReadWrite> Read for LevelTriggeredPty<T> {

@@ -25,7 +25,7 @@ macro_rules! icons {
 
 icons! {
     Close => "close", Trash => "trash", Plus => "plus", ChevronDown => "chevron-down",
-    Terminal => "terminal", Settings => "settings",
+    Terminal => "terminal", Settings => "settings", Shield => "shield",
     ArrowUp => "arrow-up", ArrowDown => "arrow-down",
     Palette => "palette", Rename => "rename", Copy => "copy", Export => "export", Search => "search",
 }

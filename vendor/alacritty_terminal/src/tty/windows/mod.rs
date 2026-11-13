@@ -37,6 +37,16 @@ pub fn new(config: &Options, window_size: WindowSize, _window_id: u64) -> Result
     conpty::new(config, window_size)
 }
 
+/// Create a PTY with an explicit initial console title for the child process.
+pub fn new_with_title(
+    config: &Options,
+    window_size: WindowSize,
+    _window_id: u64,
+    title: &str,
+) -> Result<Pty> {
+    conpty::new_with_title(config, window_size, Some(title))
+}
+
 impl Pty {
     fn new(
         backend: impl Into<Backend>,

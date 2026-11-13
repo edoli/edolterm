@@ -108,6 +108,19 @@ impl Drop for Conpty {
 unsafe impl Send for Conpty {}
 
 pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
+    new_with_title(config, window_size, None)
+}
+
+pub(super) fn new_with_title(
+    config: &Options,
+    window_size: WindowSize,
+    title: Option<&str>,
+) -> Result<Pty> {
+    if title.is_some_and(|title| title.contains('\0')) {
+        return Err(Error::new(std::io::ErrorKind::InvalidInput, "console title contains NUL"));
+    }
+    // Keep this mutable, NUL-terminated UTF-16 buffer alive through CreateProcessW.
+    let mut title = title.map(win32_string);
     let api = ConptyApi::new();
     let mut pty_handle: HPCON = 0;
 
@@ -139,7 +152,8 @@ pub fn new(config: &Options, window_size: WindowSize) -> Result<Pty> {
 
     let mut startup_info_ex: STARTUPINFOEXW = unsafe { mem::zeroed() };
 
-    startup_info_ex.StartupInfo.lpTitle = std::ptr::null_mut() as PWSTR;
+    startup_info_ex.StartupInfo.lpTitle =
+        title.as_mut().map_or(ptr::null_mut(), |title| title.as_mut_ptr());
 
     startup_info_ex.StartupInfo.cb = mem::size_of::<STARTUPINFOEXW>() as u32;
 

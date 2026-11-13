@@ -567,15 +567,17 @@ fn outside_strip(pointer: Point<Pixels>, viewport: f32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{outside_strip, over_strip};
+    use crate::app::TerminalApp;
     use gpui::{point, px};
 
     #[test]
     fn detach_hysteresis_and_drop_bounds() {
-        assert!(over_strip(point(px(100.), px(18.)), 800.));
-        assert!(!over_strip(point(px(100.), px(37.)), 800.));
-        assert!(!outside_strip(point(px(100.), px(50.)), 800.));
-        assert!(outside_strip(point(px(100.), px(80.)), 800.));
-        assert!(outside_strip(point(px(-30.), px(18.)), 800.));
-        assert!(outside_strip(point(px(830.), px(18.)), 800.));
+        let pointer = |x, y| point(px(TerminalApp::tab_inset() + x), px(y));
+        assert!(over_strip(pointer(100., 18.), 800.));
+        assert!(!over_strip(pointer(100., 37.), 800.));
+        assert!(!outside_strip(pointer(100., 50.), 800.));
+        assert!(outside_strip(pointer(100., 80.), 800.));
+        assert!(outside_strip(pointer(-30., 18.), 800.));
+        assert!(outside_strip(pointer(830., 18.), 800.));
     }
 }

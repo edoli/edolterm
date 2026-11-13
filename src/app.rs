@@ -924,7 +924,7 @@ impl TerminalApp {
 
     fn tab_dimensions(&self, window: &Window) -> (f32, f32, f32) {
         let controls = cfg!(windows) && !window.is_fullscreen();
-        let left = if cfg!(target_os = "macos") { 78. } else { 0. };
+        let left = Self::tab_inset();
         let viewport = (f32::from(window.viewport_size().width)
             - 80.
             - 28.
@@ -947,7 +947,7 @@ impl TerminalApp {
         self.animate_tabs(window, cx);
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let controls = cfg!(windows) && !window.is_fullscreen();
-        let left = if cfg!(target_os = "macos") { 78. } else { 0. };
+        let left = Self::tab_inset();
         let (viewport, tab_width, tabs_extent) = self.tab_dimensions(window);
         let mut strip = div()
             .id("tab-strip")
@@ -1013,7 +1013,26 @@ impl TerminalApp {
             .h(px(36.))
             .flex_shrink_0()
             .bg(theme.bar)
-            .when(left > 0., |d| d.child(div().w(px(left)).h_full()))
+            .when(platform::is_elevated(), |bar| {
+                bar.child(
+                    div()
+                        .id("elevation-shield")
+                        .aria_label("관리자 권한으로 실행 중")
+                        .tooltip(tip("관리자 권한으로 실행 중".into()))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .w(px(left))
+                        .h_full()
+                        .flex_shrink_0()
+                        .text_color(theme.muted)
+                        .window_control_area(WindowControlArea::Drag)
+                        .child(icon(Icon::Shield, 18.)),
+                )
+            })
+            .when(left > 0. && !platform::is_elevated(), |bar| {
+                bar.child(div().w(px(left)).h_full().flex_shrink_0())
+            })
             .child(
                 div()
                     .relative()
@@ -1190,7 +1209,7 @@ impl TerminalApp {
     fn profile_menu(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = Theme::from_setting(&self.settings.theme, cx);
         let (_, _, tabs_extent) = self.tab_dimensions(window);
-        let inset = if cfg!(target_os = "macos") { 78. } else { 0. };
+        let inset = Self::tab_inset();
         let menu_left = (inset + tabs_extent + 40.)
             .min(f32::from(window.viewport_size().width) - 348.)
             .max(8.);

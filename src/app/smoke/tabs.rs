@@ -73,7 +73,7 @@ pub(super) fn run(
     });
     draw(window, cx);
     let (_, width, _) = root.read(cx).tab_dimensions(window);
-    let inset = if cfg!(target_os = "macos") { 78. } else { 0. };
+    let inset = TerminalApp::tab_inset();
     let start = inset + width * 0.35;
     press(start, window, cx);
     move_to(start + 3., 18., true, window, cx);
@@ -256,7 +256,7 @@ pub(super) async fn rename(
             });
             draw(window, cx);
             let (_, width, _) = root.read(cx).tab_dimensions(window);
-            let inset = if cfg!(target_os = "macos") { 78. } else { 0. };
+            let inset = TerminalApp::tab_inset();
             let x = inset + width * 1.35;
             let target = root.read(cx).tabs[1].id;
             let terminal = root.read(cx).tabs[1].terminal.clone().unwrap();

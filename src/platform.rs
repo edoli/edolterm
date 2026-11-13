@@ -9,6 +9,44 @@ use std::{
     process::Command,
 };
 
+/// Elevation belongs to the GUI host, not to an untrusted shell title.
+pub fn is_elevated() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            Security::{GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation},
+            System::Threading::{GetCurrentProcess, OpenProcessToken},
+        };
+        static ELEVATED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ELEVATED.get_or_init(|| {
+            let mut token = std::ptr::null_mut();
+            let mut elevation = TOKEN_ELEVATION::default();
+            let mut returned = 0;
+            // SAFETY: All output buffers are valid for their declared size. The
+            // token handle is closed after querying, including on query failure.
+            unsafe {
+                if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+                    return false;
+                }
+                let success = GetTokenInformation(
+                    token,
+                    TokenElevation,
+                    (&mut elevation as *mut TOKEN_ELEVATION).cast(),
+                    std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                    &mut returned,
+                );
+                CloseHandle(token);
+                success != 0 && elevation.TokenIsElevated != 0
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 /// Opt-in startup diagnostics. No file is opened during normal launches.
 pub fn trace_startup(stage: &str) {
     use std::{

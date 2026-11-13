@@ -177,7 +177,7 @@ impl Session {
             escape_args: true,
         };
         #[cfg(windows)]
-        let pty = windows_pty::new(&options, size.into(), window_id);
+        let pty = windows_pty::new(&options, size.into(), window_id, &profile.name);
         #[cfg(not(windows))]
         let pty = tty::new(&options, size.into(), window_id);
         let pty =
@@ -315,6 +315,53 @@ impl Drop for Session {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    #[cfg(windows)]
+    fn profile_name_is_the_initial_console_title_and_shell_title_changes_are_delivered() {
+        let mut programs = vec![PathBuf::from("powershell.exe")];
+        if let Some(pwsh) = crate::platform::find_program("pwsh") {
+            programs.push(pwsh);
+        }
+        // This value appears only in lpTitle, never in the child command. It
+        // exercises UTF-16, quotes and spaces through the real console API.
+        let initial_title = "셸 '프로필' \"🙂\"";
+        let changed_title = r"작업: C:\custom\pwsh.exe";
+        let script = r#"[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); Start-Sleep -Milliseconds 300; [Console]::WriteLine(('INITIAL_' + [Console]::Title + '_END')); [Console]::Title = '작업: C:\custom\pwsh.exe'; Start-Sleep -Seconds 20"#;
+        for program in programs {
+            let profile = Profile::new(
+                "initial-title",
+                initial_title,
+                program.to_string_lossy(),
+                &["-NoLogo", "-NoProfile", "-Command", script],
+            );
+            let (session, events) = Session::start(profile, None, &Settings::default(), 0).unwrap();
+            let started = Instant::now();
+            let mut changed = false;
+            loop {
+                while let Ok(event) = events.try_recv() {
+                    match event {
+                        Event::PtyWrite(text) => session.write(text.into_bytes()),
+                        Event::Wakeup => session.pending.store(false, Ordering::Release),
+                        Event::Title(title) if title == changed_title => changed = true,
+                        _ => {}
+                    }
+                }
+                // An elevated PowerShell may prepend its localized prefix; the
+                // initial title must still be the supplied name, not its path.
+                let output = session.plain_text();
+                if output.contains(&format!("{initial_title}_END")) && changed {
+                    break;
+                }
+                assert!(
+                    started.elapsed() < Duration::from_secs(20),
+                    "program: {program:?}, output: {output}, title changed: {changed}"
+                );
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            stop_and_wait(&session);
+        }
+    }
 
     #[test]
     #[cfg(windows)]
