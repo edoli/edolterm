@@ -62,6 +62,7 @@ pub(super) async fn run(
     cx: &mut AsyncApp,
 ) -> Result<()> {
     let (original, active) = root.read_with(cx, |app, _| (app.settings.clone(), app.active));
+    color_schemes(root, handle, cx).await?;
     handle.update(cx, |_, window, cx| -> Result<()> {
         root.update(cx, |app, cx| {
             app.hide_search(window, cx);
@@ -461,6 +462,218 @@ async fn profile_search(
     Ok(())
 }
 
+/// Sample away from title glyphs, icons, borders, and the active indicator.
+fn assert_tab_background(
+    root: &Entity<TerminalApp>,
+    index: usize,
+    expected: Hsla,
+    window: &Window,
+    cx: &App,
+) -> Result<()> {
+    let app = root.read(cx);
+    let (_, width, _) = app.tab_dimensions(window);
+    let x = TerminalApp::tab_inset()
+        + width * (index as f32 + 0.5)
+        + f32::from(app.tab_scroll.offset().x);
+    let scale = window.scale_factor();
+    let image = window.render_to_image()?;
+    let actual = image.get_pixel((x * scale) as u32, (6. * scale) as u32);
+    let expected = expected.to_rgb();
+    for (actual, expected) in actual.0[..3]
+        .iter()
+        .zip([expected.r, expected.g, expected.b])
+    {
+        ensure!(
+            (*actual as f32 - expected * 255.).abs() <= 1.,
+            "tab {index} background mismatch: pixel channel {actual}, expected {}",
+            expected * 255.
+        );
+    }
+    Ok(())
+}
+
+async fn color_schemes(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let original = root.read_with(cx, |app, _| app.settings.clone());
+    let dir = root.read_with(cx, |app, _| app.dir.clone());
+    handle.update(cx, |_, window, cx| -> Result<()> {
+        root.update(cx, |app, cx| app.settings_tab(window, cx));
+        draw(window, cx);
+        show_page(root, SettingsPage::ColorSchemes, window, cx);
+        window
+            .render_to_image()?
+            .save(dir.join("color-schemes-page.png"))?;
+        // Click the second gallery card using the visible scroll viewport.
+        let bounds = root.read(cx).settings_scroll.bounds();
+        click(bounds.origin + point(px(100.), px(240.)), window, cx);
+        ensure!(
+            root.read(cx).draft.color_scheme == "Campbell Powershell",
+            "gallery card click failed"
+        );
+        ensure!(
+            root.read(cx).settings == original,
+            "scheme applied before saving"
+        );
+        ensure!(
+            root.read(cx).has_settings_changes(cx),
+            "scheme change not detected"
+        );
+        // Gallery cards remain keyboard-selectable without the appearance dropdown.
+        press("tab", window, cx)?;
+        press("enter", window, cx)?;
+        ensure!(
+            root.read(cx).draft.color_scheme == "CGA",
+            "gallery keyboard selection failed"
+        );
+        root.update(cx, |app, cx| app.choose_color_scheme("Solarized Dark", cx));
+        Ok(())
+    })??;
+    cx.background_executor()
+        .timer(Duration::from_millis(20))
+        .await;
+    handle.update(cx, |_, window, cx| -> Result<()> {
+        ensure!(
+            root.read(cx).draft.color_scheme == "Solarized Dark",
+            "gallery selection failed"
+        );
+        root.update(cx, |app, cx| app.save_settings(cx));
+        ensure!(
+            Settings::load(&dir)?.color_scheme == "Solarized Dark",
+            "scheme not persisted"
+        );
+        ensure!(
+            root.read(cx)
+                .tabs
+                .iter()
+                .filter_map(|tab| tab.terminal.as_ref())
+                .all(|t| t.read(cx).settings.color_scheme == "Solarized Dark"),
+            "scheme not applied to existing terminals"
+        );
+        let terminal_index = root
+            .read(cx)
+            .tabs
+            .iter()
+            .position(|tab| tab.terminal.is_some())
+            .unwrap();
+        root.update(cx, |app, cx| app.activate(terminal_index, window, cx));
+        draw(window, cx);
+        window
+            .render_to_image()?
+            .save(dir.join("solarized-dark-terminal.png"))?;
+        for (scheme, app_theme, screenshot) in [
+            ("Solarized Light", "dark", "solarized-light-terminal.png"),
+            ("Ubuntu", "light", "ubuntu-light-ui-terminal.png"),
+            ("Ubuntu", "dark", "ubuntu-terminal.png"),
+        ] {
+            root.update(cx, |app, cx| {
+                app.settings_tab(window, cx);
+                app.choose_color_scheme(scheme, cx);
+                app.draft.theme = app_theme.into();
+                app.save_settings(cx);
+                app.activate(terminal_index, window, cx);
+            });
+            ensure!(
+                Settings::load(&dir)?.color_scheme == scheme,
+                "scheme not persisted: {scheme}"
+            );
+            draw(window, cx);
+            let image = window.render_to_image()?;
+            image.save(dir.join(screenshot))?;
+            let scheme_background = crate::config::color_schemes::resolve(scheme).background;
+            assert_tab_background(
+                root,
+                terminal_index,
+                rgb(scheme_background).into(),
+                window,
+                cx,
+            )?;
+            // An inactive tab keeps the tab-row color even with a light terminal palette.
+            if let Some(inactive) =
+                root.read(cx)
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, tab)| {
+                        (index != terminal_index && tab.terminal.is_some()).then_some(index)
+                    })
+            {
+                let theme = Theme::from_setting(app_theme, cx);
+                assert_tab_background(root, inactive, theme.bar, window, cx)?;
+            }
+            // Hovering an automatic active tab must not break its background match.
+            let (_, width, _) = root.read(cx).tab_dimensions(window);
+            let position = point(
+                px(TerminalApp::tab_inset() + width * (terminal_index as f32 + 0.5)),
+                px(6.),
+            );
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position,
+                    ..Default::default()
+                }),
+                cx,
+            );
+            draw(window, cx);
+            assert_tab_background(
+                root,
+                terminal_index,
+                rgb(scheme_background).into(),
+                window,
+                cx,
+            )?;
+            // Explicit tab colors retain their existing tint, then clearing restores the scheme.
+            root.update(cx, |app, cx| {
+                app.tabs[terminal_index].color = Some(0xe74856);
+                cx.notify();
+            });
+            draw(window, cx);
+            let theme = Theme::from_setting(app_theme, cx);
+            let tint = theme.bg.blend(Hsla::from(rgb(0xe74856)).opacity(0.3));
+            // Move off the tab so this assertion measures its normal, rather than hover, tint.
+            window.dispatch_event(
+                PlatformInput::MouseMove(MouseMoveEvent {
+                    position: point(px(800.), px(300.)),
+                    ..Default::default()
+                }),
+                cx,
+            );
+            draw(window, cx);
+            assert_tab_background(root, terminal_index, tint, window, cx)?;
+            root.update(cx, |app, cx| {
+                app.tabs[terminal_index].color = None;
+                cx.notify();
+            });
+            draw(window, cx);
+            assert_tab_background(
+                root,
+                terminal_index,
+                rgb(scheme_background).into(),
+                window,
+                cx,
+            )?;
+        }
+        root.update(cx, |app, cx| {
+            app.settings_tab(window, cx);
+            app.choose_color_scheme("Vintage", cx);
+            app.cancel_settings_changes(cx);
+        });
+        draw(window, cx);
+        ensure!(
+            root.read(cx).draft.color_scheme == "Ubuntu",
+            "cancel did not revert scheme"
+        );
+        original.save(&dir)?;
+        root.update(cx, |app, cx| app.reload_settings(cx));
+        draw(window, cx);
+        ensure!(root.read(cx).settings == original, "scheme reload failed");
+        Ok(())
+    })??;
+    Ok(())
+}
+
 fn pages_and_actions(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut App) -> Result<()> {
     let original = root.read(cx).settings.clone();
     let dir = root.read(cx).dir.clone();
@@ -507,6 +720,7 @@ fn pages_and_actions(root: &Entity<TerminalApp>, window: &mut Window, cx: &mut A
     for (page, name) in [
         (SettingsPage::Behavior, "behavior"),
         (SettingsPage::Appearance, "appearance"),
+        (SettingsPage::ColorSchemes, "color-schemes"),
         (SettingsPage::Profiles, "profiles"),
         (SettingsPage::Shortcuts, "shortcuts"),
     ] {

@@ -481,7 +481,7 @@ impl TerminalView {
     }
 
     fn event(&mut self, event: Event, cx: &mut Context<Self>) {
-        let theme = Theme::from_setting(&self.settings.theme, cx);
+        let theme = Theme::from_settings(&self.settings, cx);
         match event {
             Event::Wakeup => {
                 if let Some(s) = &self.session {
@@ -930,7 +930,7 @@ impl TerminalView {
     ) -> Frame {
         self.bounds = bounds;
         let old_cursor_bounds = self.cursor_bounds;
-        let theme = Theme::from_setting(&self.settings.theme, cx);
+        let theme = Theme::from_settings(&self.settings, cx);
         let mut font = font(self.settings.font_family.clone());
         font.features = FontFeatures::disable_ligatures();
         font.fallbacks = Some(FontFallbacks::from_fonts(if cfg!(windows) {
@@ -1296,7 +1296,7 @@ impl EntityInputHandler for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = Theme::from_setting(&self.settings.theme, cx);
+        let theme = Theme::from_settings(&self.settings, cx);
         let a = cx.entity();
         let b = a.clone();
         let error = self.error.clone();

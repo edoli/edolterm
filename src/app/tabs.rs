@@ -488,16 +488,32 @@ impl TerminalApp {
             .color
             .map(|color| rgb(color).into())
             .unwrap_or(theme.accent);
-        let base = if active { theme.bg } else { theme.bar };
+        let terminal_background = if active && tab.color.is_none() {
+            tab.terminal.as_ref().map(|terminal| {
+                crate::theme::TerminalTheme::from_scheme(&terminal.read(cx).settings.color_scheme)
+                    .bg
+            })
+        } else {
+            None
+        };
+        let base = terminal_background.unwrap_or(if active { theme.bg } else { theme.bar });
         let background = if tab.color.is_some() {
-            base.blend(color.opacity(0.2))
+            base.blend(color.opacity(if active { 0.3 } else { 0.2 }))
         } else {
             base
         };
         let hover = if tab.color.is_some() {
             background.blend(theme.fg.opacity(0.06))
         } else if active {
-            theme.bg
+            background
+        } else {
+            theme.hover
+        };
+        let foreground = terminal_background
+            .map(crate::theme::contrasting_text)
+            .unwrap_or(if active { theme.fg } else { theme.muted });
+        let close_hover = if terminal_background.is_some() {
+            background.blend(foreground.opacity(0.12))
         } else {
             theme.hover
         };
@@ -548,8 +564,8 @@ impl TerminalApp {
             .when(floating, |tab| tab.shadow_md().border_l_1())
             .cursor_default()
             .text_size(px(12.))
-            .text_color(if active { theme.fg } else { theme.muted })
-            .when(active || tab.color.is_some(), |tab| {
+            .text_color(foreground)
+            .when(active, |tab| {
                 tab.child(
                     div()
                         .absolute()
@@ -611,7 +627,7 @@ impl TerminalApp {
                     .size(px(22.))
                     .flex_shrink_0()
                     .rounded_sm()
-                    .hover(move |s| s.bg(theme.hover))
+                    .hover(move |s| s.bg(close_hover))
                     .child(icon(Icon::Close, 14.))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_mouse_down(

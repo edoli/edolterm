@@ -635,6 +635,11 @@ mod tests {
             .unwrap();
         std::fs::remove_file(path).unwrap();
         std::fs::remove_file(dir.join("session.json")).unwrap();
+        // Rendering the settings tab may create its initial settings file.
+        let settings_path = dir.join("settings.toml");
+        if settings_path.exists() {
+            std::fs::remove_file(settings_path).unwrap();
+        }
         std::fs::remove_dir(dir).unwrap();
     }
 }

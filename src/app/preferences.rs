@@ -1,11 +1,13 @@
 //! Settings pages, shared navigation/footer, and preference editing controls.
 use super::*;
+use crate::config::color_schemes::{COLOR_SCHEMES, ColorScheme};
 use crate::select::{Choice, Select, Selected};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum SettingsPage {
     Behavior,
     Appearance,
+    ColorSchemes,
     Profiles,
     Shortcuts,
 }
@@ -15,6 +17,7 @@ impl SettingsPage {
         match self {
             Self::Behavior => "동작",
             Self::Appearance => "모양",
+            Self::ColorSchemes => "색 구성표",
             Self::Profiles => "프로필",
             Self::Shortcuts => "단축키",
         }
@@ -22,6 +25,9 @@ impl SettingsPage {
 
     fn description(self) -> &'static str {
         match self {
+            Self::ColorSchemes => {
+                "터미널의 배경, 글자와 ANSI 색상을 선택합니다. 저장하면 모든 터미널에 적용됩니다."
+            }
             Self::Shortcuts => "Windows Terminal의 기본 키를 사용합니다. 구현된 기능만 표시됩니다.",
             _ => "설정은 저장하면 열린 터미널에도 적용됩니다.",
         }
@@ -194,6 +200,7 @@ impl TerminalApp {
                 [
                     SettingsPage::Behavior,
                     SettingsPage::Appearance,
+                    SettingsPage::ColorSchemes,
                     SettingsPage::Profiles,
                     SettingsPage::Shortcuts,
                 ]
@@ -230,6 +237,11 @@ impl TerminalApp {
         let (body, scroll_id, scroll) = match self.settings_page {
             SettingsPage::Behavior | SettingsPage::Appearance | SettingsPage::Profiles => (
                 self.preferences_content(theme, cx),
+                "settings-scroll",
+                &self.settings_scroll,
+            ),
+            SettingsPage::ColorSchemes => (
+                self.color_schemes_content(theme, cx),
                 "settings-scroll",
                 &self.settings_scroll,
             ),
@@ -529,8 +541,55 @@ impl TerminalApp {
                 .child(div().mt_5().mb_2().text_size(px(16.)).font_weight(FontWeight::BOLD).child("사용자 지정 프로필"))
                 .child(div().text_color(theme.description).child("하단의 ‘설정 파일 열기’로 파일을 열고 [[profiles]]에 실행 파일, 인자, 시작 폴더, 환경변수를 추가할 수 있습니다. 편집한 뒤 ‘설정 다시 불러오기’를 누르세요."))
                 .child(div().mt_2().text_size(px(12.)).text_color(theme.muted).child(self.dir.join("settings.toml").display().to_string())),
-            SettingsPage::Shortcuts => unreachable!(),
+            SettingsPage::Shortcuts | SettingsPage::ColorSchemes => unreachable!(),
         }
+    }
+
+    fn color_schemes_content(&self, theme: Theme, cx: &mut Context<Self>) -> Div {
+        div()
+            .tab_group()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .children(COLOR_SCHEMES.iter().enumerate().map(|(index, scheme)| {
+                let selected = self.draft.color_scheme == scheme.name;
+                scheme_preview(scheme)
+                    .id(("color-scheme", index))
+                    .role(Role::Button)
+                    .aria_label(scheme.name)
+                    .aria_selected(selected)
+                    .tab_index(0)
+                    .cursor_pointer()
+                    .p_5()
+                    .border_1()
+                    .border_color(if selected { theme.accent } else { theme.border })
+                    .hover(move |style| style.border_color(theme.accent))
+                    .focus(move |style| style.border_color(theme.accent))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.choose_color_scheme(scheme.name, cx);
+                    }))
+                    .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
+                        if event.keystroke.key == "tab" {
+                            if event.keystroke.modifiers.shift {
+                                window.focus_prev(cx);
+                            } else {
+                                window.focus_next(cx);
+                            }
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                            this.choose_color_scheme(scheme.name, cx);
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        }
+                    }))
+            }))
+    }
+
+    pub(super) fn choose_color_scheme(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.draft.color_scheme = name.into();
+        cx.notify();
     }
 
     pub(super) fn open_settings_file(&mut self, cx: &mut Context<Self>) {
@@ -723,4 +782,32 @@ fn setting(
                 .justify_end()
                 .child(control),
         )
+}
+
+/// Use the actual scheme colors so light and dark palettes can be compared in any UI theme.
+fn scheme_preview(scheme: &ColorScheme) -> Div {
+    div()
+        .flex()
+        .flex_wrap()
+        .items_center()
+        .gap_3()
+        .p_3()
+        .rounded_md()
+        .bg(rgb(scheme.background))
+        .text_color(rgb(scheme.foreground))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(3.))
+                .flex_shrink_0()
+                .children(scheme.ansi.chunks(8).map(|row| {
+                    div().flex().gap(px(3.)).children(
+                        row.iter()
+                            .map(|color| div().size(px(14.)).rounded_sm().bg(rgb(*color))),
+                    )
+                })),
+        )
+        .child(div().flex_1().min_w(px(130.)).child(scheme.name))
+        .child(div().text_size(px(12.)).child("Aa 가나다 0123"))
 }

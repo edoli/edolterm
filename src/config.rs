@@ -5,6 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[path = "color_schemes.rs"]
+pub mod color_schemes;
+
 #[path = "config/shortcuts.rs"]
 pub mod shortcuts;
 
@@ -25,6 +28,7 @@ pub struct Settings {
     pub detect_urls: bool,
     pub scrollback: usize,
     pub theme: String,
+    pub color_scheme: String,
     pub confirm_close: bool,
     pub restore_session: bool,
     pub allow_osc52: bool,
@@ -54,6 +58,7 @@ impl Default for Settings {
             detect_urls: true,
             scrollback: 10_000,
             theme: "system".into(),
+            color_scheme: crate::config::color_schemes::DEFAULT_SCHEME.into(),
             confirm_close: true,
             restore_session: true,
             allow_osc52: false,
@@ -134,6 +139,9 @@ impl Settings {
         }
         if !matches!(self.theme.as_str(), "dark" | "light" | "system") {
             bail!("theme은 dark, light 또는 system이어야 합니다.");
+        }
+        if crate::config::color_schemes::find(&self.color_scheme).is_none() {
+            bail!("알 수 없는 색 구성표: {}", self.color_scheme);
         }
         // Validate each list independently: user profiles may override discoveries.
         for profiles in [&self.profiles, &self.discovered_profiles] {
@@ -257,6 +265,29 @@ impl SavedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn color_schemes_default_for_legacy_settings_and_persist() {
+        let legacy: Settings = toml::from_str("theme = 'light'").unwrap();
+        assert_eq!(legacy.color_scheme, "Campbell");
+        for scheme in crate::config::color_schemes::COLOR_SCHEMES {
+            let settings = Settings {
+                color_scheme: scheme.name.into(),
+                ..Settings::default()
+            };
+            settings.validate().unwrap();
+            let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(settings, parsed);
+        }
+        assert!(
+            Settings {
+                color_scheme: "unknown".into(),
+                ..Settings::default()
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
     #[test]
     fn interaction_settings_default_on_and_round_trip_when_disabled() {
         let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();

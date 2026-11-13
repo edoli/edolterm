@@ -7,17 +7,30 @@ use alacritty_terminal::{
 };
 use gpui::{App, Hsla, WindowAppearance, rgb, rgba};
 
-// Windows Terminal's Campbell scheme, in ANSI order (not Windows console order).
-const CAMPBELL: [usize; 16] = [
-    0x0c0c0c, 0xc50f1f, 0x13a10e, 0xc19c00, 0x0037da, 0x881798, 0x3a96dd, 0xcccccc, 0x767676,
-    0xe74856, 0x16c60c, 0xf9f1a5, 0x3b78ff, 0xb4009e, 0x61d6d6, 0xf2f2f2,
-];
-
 /// Colors for a surface and the text displayed on it.
 #[derive(Clone, Copy)]
 pub struct SurfaceColors {
     pub bg: Hsla,
     pub fg: Hsla,
+}
+
+/// Choose the black or white text with the greater contrast against a surface.
+pub fn contrasting_text(background: Hsla) -> Hsla {
+    let color = background.to_rgb();
+    let linear = |channel: f32| {
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(color.r) + 0.7152 * linear(color.g) + 0.0722 * linear(color.b);
+    rgb(if luminance > 0.179 {
+        0x000000
+    } else {
+        0xffffff
+    })
+    .into()
 }
 
 #[derive(Clone, Copy)]
@@ -82,6 +95,12 @@ impl Theme {
             "light" => true,
             _ => false,
         }
+    }
+
+    pub fn from_settings(settings: &Settings, cx: &App) -> Self {
+        let mut theme = Self::from_setting(&settings.theme, cx);
+        theme.terminal = TerminalTheme::from_scheme(&settings.color_scheme);
+        theme
     }
 
     pub fn from_setting(setting: &str, cx: &App) -> Self {
@@ -207,24 +226,31 @@ pub struct TerminalTheme {
     pub selection: Hsla,
     pub search_match: SurfaceColors,
     pub dim_opacity: f32,
+    scheme: &'static crate::config::color_schemes::ColorScheme,
 }
 
 impl Default for TerminalTheme {
     fn default() -> Self {
+        Self::from_scheme(crate::config::color_schemes::DEFAULT_SCHEME)
+    }
+}
+
+impl TerminalTheme {
+    pub fn from_scheme(name: &str) -> Self {
+        let scheme = crate::config::color_schemes::resolve(name);
         Self {
-            bg: rgb(0x0c0c0c).into(),
-            fg: rgb(0xcccccc).into(),
-            selection: rgb(0x404040).into(),
+            bg: rgb(scheme.background).into(),
+            fg: rgb(scheme.foreground).into(),
+            selection: Hsla::from(rgb(scheme.selection)).opacity(0.4),
             search_match: SurfaceColors {
                 bg: rgb(0x886629).into(),
                 fg: rgb(0xffffff).into(),
             },
             dim_opacity: 0.6,
+            scheme,
         }
     }
-}
 
-impl TerminalTheme {
     pub fn color(&self, color: Color, overrides: &Colors, bold: bool) -> Hsla {
         match color {
             Color::Spec(c) => {
@@ -251,7 +277,7 @@ impl TerminalTheme {
             return c;
         }
         let value = match i {
-            0..=15 => CAMPBELL[i],
+            0..=15 => self.scheme.ansi[i] as usize,
             16..=231 => {
                 let n = i - 16;
                 let scale = |c: usize| if c == 0 { 0 } else { 55 + c * 40 };
@@ -261,20 +287,125 @@ impl TerminalTheme {
                 let v = 8 + (i - 232) * 10;
                 (v << 16) | (v << 8) | v
             }
-            257 => 0x0c0c0c,
-            258 => 0xffffff,
+            257 => self.scheme.background as usize,
+            258 => self.scheme.cursor as usize,
             259..=266 => {
-                let v = CAMPBELL[i - 259];
+                let v = self.scheme.ansi[i - 259] as usize;
                 (((v >> 16 & 255) / 2) << 16) | (((v >> 8 & 255) / 2) << 8) | ((v & 255) / 2)
             }
-            267 => 0xf2f2f2,
-            268 => 0x666666,
-            _ => 0xcccccc,
+            267 => self.scheme.ansi[15] as usize,
+            268 => {
+                let v = self.scheme.foreground as usize;
+                (((v >> 16 & 255) / 2) << 16) | (((v >> 8 & 255) / 2) << 8) | ((v & 255) / 2)
+            }
+            _ => self.scheme.foreground as usize,
         };
         Rgb {
             r: (value >> 16) as u8,
             g: (value >> 8) as u8,
             b: value as u8,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::color_schemes::COLOR_SCHEMES;
+    use alacritty_terminal::vte::ansi::NamedColor;
+
+    fn packed(rgb: Rgb) -> u32 {
+        (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
+    }
+
+    #[test]
+    fn tab_text_stays_readable_on_light_and_dark_terminal_backgrounds() {
+        for name in [
+            "Campbell",
+            "Campbell Powershell",
+            "Solarized Dark",
+            "Ubuntu",
+        ] {
+            assert_eq!(
+                contrasting_text(TerminalTheme::from_scheme(name).bg),
+                Hsla::from(rgb(0xffffff)),
+                "{name}"
+            );
+        }
+        for name in [
+            "One Half Light",
+            "Solarized Light",
+            "Tango Light",
+            "VSCode Light Modern",
+        ] {
+            assert_eq!(
+                contrasting_text(TerminalTheme::from_scheme(name).bg),
+                Hsla::from(rgb(0x000000)),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn schemes_drive_named_ansi_cursor_and_dim_colors() {
+        let colors = Colors::default();
+        let mut names = std::collections::HashSet::new();
+        for scheme in COLOR_SCHEMES {
+            assert!(names.insert(scheme.name));
+            let theme = TerminalTheme::from_scheme(scheme.name);
+            assert_eq!(
+                packed(theme.rgb(NamedColor::Foreground as usize, &colors)),
+                scheme.foreground
+            );
+            assert_eq!(
+                packed(theme.rgb(NamedColor::Background as usize, &colors)),
+                scheme.background
+            );
+            assert_eq!(
+                packed(theme.rgb(NamedColor::Cursor as usize, &colors)),
+                scheme.cursor
+            );
+            for (index, color) in scheme.ansi.iter().enumerate() {
+                assert_eq!(packed(theme.rgb(index, &colors)), *color);
+            }
+            assert_eq!(
+                theme.color(Color::Named(NamedColor::Red), &colors, true),
+                theme.indexed(9, &colors)
+            );
+            let red = theme.rgb(1, &colors);
+            assert_eq!(
+                theme.rgb(260, &colors),
+                Rgb {
+                    r: red.r / 2,
+                    g: red.g / 2,
+                    b: red.b / 2
+                }
+            );
+            assert_eq!(packed(theme.rgb(16, &colors)), 0);
+            assert_eq!(packed(theme.rgb(231, &colors)), 0xffffff);
+            assert_eq!(packed(theme.rgb(232, &colors)), 0x080808);
+            assert_eq!(packed(theme.rgb(255, &colors)), 0xeeeeee);
+        }
+    }
+
+    #[test]
+    fn osc_overrides_and_truecolor_take_precedence_over_schemes() {
+        let custom = Rgb {
+            r: 12,
+            g: 34,
+            b: 56,
+        };
+        for scheme in COLOR_SCHEMES {
+            let theme = TerminalTheme::from_scheme(scheme.name);
+            let mut colors = Colors::default();
+            for index in [1, 16, 256, 257, 258] {
+                colors[index] = Some(custom);
+                assert_eq!(theme.rgb(index, &colors), custom);
+            }
+            assert_eq!(
+                theme.color(Color::Spec(custom), &colors, false),
+                Hsla::from(rgb(0x0c2238))
+            );
         }
     }
 }
