@@ -128,7 +128,7 @@ impl Session {
             .or_else(|| profile.cwd.clone())
             .unwrap_or_else(crate::platform::home_dir);
         if !cwd.is_dir() {
-            anyhow::bail!("시작 폴더를 찾을 수 없습니다: {}", cwd.display());
+            anyhow::bail!(crate::tf!("starting_directory_not_found_arg0", arg0 => cwd.display()));
         }
         let (tx, rx) = async_channel::unbounded();
         let pending = Arc::new(AtomicBool::new(false));
@@ -181,7 +181,7 @@ impl Session {
         #[cfg(not(windows))]
         let pty = tty::new(&options, size.into(), window_id);
         let pty =
-            pty.with_context(|| format!("{} 실행 실패 ({})", profile.name, profile.program))?;
+            pty.with_context(|| crate::tf!("failed_to_launch_arg0_arg1", arg0 => profile.name, arg1 => profile.program))?;
         crate::platform::trace_startup("pty_ready");
         Self::connect(pty, terminal, proxy, pending, size, cwd, rx)
     }

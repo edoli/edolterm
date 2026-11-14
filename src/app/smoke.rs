@@ -12,6 +12,8 @@ mod instances;
 #[cfg(all(feature = "ui-tests", windows))]
 mod keys;
 #[cfg(feature = "ui-tests")]
+mod readme;
+#[cfg(feature = "ui-tests")]
 mod scroll;
 #[cfg(feature = "ui-tests")]
 mod settings_controls;
@@ -28,7 +30,7 @@ pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
         | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links"
-        | "updates" | "updates-preview" => mode,
+        | "updates" | "updates-preview" | "readme" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -44,6 +46,11 @@ pub fn start(
     window: &mut Window,
     cx: &mut App,
 ) {
+    #[cfg(feature = "ui-tests")]
+    if mode == "readme" {
+        readme::start(root, window, cx);
+        return;
+    }
     #[cfg(feature = "ui-tests")]
     if mode == "updates-preview" {
         if let Err(error) = updates::preview(&root, window, cx) {

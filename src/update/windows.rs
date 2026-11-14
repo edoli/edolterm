@@ -87,7 +87,7 @@ impl Drop for Handoff {
 impl Handoff {
     pub fn commit(mut self) -> io::Result<()> {
         if self.child.as_mut().unwrap().try_wait()?.is_some() {
-            return Err(io::Error::other("업데이트 도우미가 종료되었습니다"));
+            return Err(io::Error::other(crate::i18n::tr("the_update_helper_ended")));
         }
         fs::write(self.directory.join("go.pending"), b"install")?;
         fs::rename(self.directory.join("go.pending"), self.directory.join("go"))?;
@@ -103,14 +103,15 @@ pub fn prepare(
     config: &Path,
 ) -> Result<Handoff> {
     if install_scope(exe) != scope {
-        return Err(anyhow!(
-            "설치 경로가 변경되었습니다. 설치 프로그램을 다시 실행하세요"
-        ));
+        return Err(anyhow!(crate::i18n::tr(
+            "the_installation_path_changed_run_the_installer_again"
+        )));
     }
     // Preserve relative --space / EDOLTERM_CONFIG_DIR paths across a different restart cwd.
     let config = std::path::absolute(config)?;
     let mut random = [0u8; 16];
-    getrandom::fill(&mut random).map_err(|e| anyhow!("임시 폴더를 만들 수 없습니다: {e}"))?;
+    getrandom::fill(&mut random)
+        .map_err(|e| anyhow!(crate::tf!("unable_to_create_temporary_folder_e", e => e)))?;
     let name: String = random.iter().map(|b| format!("{b:02x}")).collect();
     let directory = std::env::temp_dir().join(format!("edolterm-update-{name}"));
     fs::create_dir(&directory)?;
@@ -137,14 +138,14 @@ pub fn prepare(
     file.sync_all()?;
     if status != 200 || file.metadata()?.len() != release.size {
         return Err(anyhow!(
-            "설치 파일 다운로드가 완전하지 않습니다 (응답 {status})"
+            crate::tf!("the_installer_download_is_incomplete_response_status", status => status)
         ));
     }
     drop(file);
     let script = handoff.directory.join("update.ps1");
     fs::write(&script, HELPER_SCRIPT)?;
-    let system =
-        std::env::var_os("SystemRoot").ok_or_else(|| anyhow!("Windows 경로를 찾을 수 없습니다"))?;
+    let system = std::env::var_os("SystemRoot")
+        .ok_or_else(|| anyhow!(crate::i18n::tr("windows_directory_not_found")))?;
     let shell = PathBuf::from(system).join("System32/WindowsPowerShell/v1.0/powershell.exe");
     // The script is constant. Paths and release data are environment values, never executable code.
     let command = "& ([ScriptBlock]::Create([IO.File]::ReadAllText($env:EDOLTERM_UPDATE_SCRIPT)))";
@@ -159,6 +160,25 @@ pub fn prepare(
             &encoded,
         ])
         .env("EDOLTERM_UPDATE_SCRIPT", &script)
+        .env(
+            "EDOLTERM_UPDATE_MESSAGES",
+            serde_json::to_string(
+                &[
+                    "installer_verification_failed",
+                    "invalid_update_information",
+                    "update_executable_mismatch",
+                    "close_app_before_update",
+                    "close_other_windows_before_update",
+                    "installer_failed_code",
+                    "installed_version_mismatch",
+                    "update_failed_error",
+                    "restart_failed_error",
+                ]
+                .into_iter()
+                .map(|id| (id, crate::i18n::tr(id)))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+            )?,
+        )
         .env("EDOLTERM_UPDATE_DIR", &handoff.directory)
         .env("EDOLTERM_UPDATE_EXE", exe)
         .env(
@@ -184,13 +204,12 @@ pub fn prepare(
             return Ok(handoff);
         }
         if handoff.child.as_mut().unwrap().try_wait()?.is_some() {
-            return Err(anyhow!(
-                read_result(&config)
-                    .unwrap_or_else(|| "업데이트 도우미를 시작하지 못했습니다".into())
-            ));
+            return Err(anyhow!(read_result(&config).unwrap_or_else(|| {
+                crate::i18n::tr("failed_to_start_update_helper").into()
+            })));
         }
         if Instant::now() >= deadline {
-            return Err(anyhow!("업데이트 도우미 응답 시간이 초과되었습니다"));
+            return Err(anyhow!(crate::i18n::tr("the_update_helper_timed_out")));
         }
         std::thread::sleep(Duration::from_millis(50));
     }

@@ -4,6 +4,7 @@ mod cli;
 mod config;
 #[cfg(windows)]
 mod handoff;
+mod i18n;
 mod icons;
 mod instance;
 mod keys;
@@ -17,6 +18,7 @@ mod theme;
 mod update;
 
 fn main() {
+    i18n::set_language("system");
     platform::trace_startup("main");
     let options = match cli::Options::parse(std::env::args_os().skip(1)) {
         Ok(options) => options,

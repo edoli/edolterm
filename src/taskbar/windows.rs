@@ -48,7 +48,7 @@ pub(super) fn schedule(
                 // Shell COM objects stay on one dedicated STA thread. Serial updates
                 // prevent an older settings snapshot overwriting a newer one.
                 if let Err(error) = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() } {
-                    eprintln!("점프 목록 COM 초기화 실패: {error}");
+                    eprintln!("{}", crate::tf!("jump_list_com_initialization_failed_error", error => error));
                     return;
                 }
                 let mut cache = IconCache::load(&cache_path);
@@ -58,17 +58,17 @@ pub(super) fn schedule(
                         request = latest;
                     }
                     if let Err(error) = process(&request, &mut cache, &mut bitmaps) {
-                        eprintln!("점프 목록 갱신 실패: {error:#}");
+                        eprintln!("{}", crate::tf!("failed_to_update_jump_list_error", error => format!("{:#}", error)));
                     }
                     if let Err(error) = cache.save(&cache_path) {
-                        eprintln!("점프 목록 아이콘 캐시 저장 실패: {error:#}");
+                        eprintln!("{}", crate::tf!("failed_to_save_jump_list_icon_cache_error", error => format!("{:#}", error)));
                     }
                 }
                 unsafe { CoUninitialize() };
             }) {
             Ok(_) => Some(sender),
             Err(error) => {
-                eprintln!("점프 목록 스레드 시작 실패: {error}");
+                eprintln!("{}", crate::tf!("failed_to_start_jump_list_thread_error", error => error));
                 None
             }
         }

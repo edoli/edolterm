@@ -13,6 +13,7 @@ pub struct TextField {
     pub text: String,
     pub focus: FocusHandle,
     pub placeholder: String,
+    placeholder_id: Option<&'static str>,
     selected: Range<usize>,
     marked: Option<Range<usize>>,
     layout: Option<ShapedLine>,
@@ -58,6 +59,7 @@ impl TextField {
             text,
             focus: cx.focus_handle().tab_stop(true),
             placeholder: placeholder.into(),
+            placeholder_id: None,
             selected: len..len,
             marked: None,
             layout: None,
@@ -65,6 +67,22 @@ impl TextField {
             _theme_subscription: cx.observe_global::<SharedSettings>(|_, cx| cx.notify()),
         }
     }
+    pub fn localized(
+        text: impl Into<String>,
+        placeholder_id: &'static str,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut field = Self::new(text, crate::i18n::tr(placeholder_id), cx);
+        field.placeholder_id = Some(placeholder_id);
+        field
+    }
+
+    fn placeholder_text(&self) -> &str {
+        self.placeholder_id
+            .map(crate::i18n::tr)
+            .unwrap_or(&self.placeholder)
+    }
+
     fn range(&self, r: Range<usize>) -> Range<usize> {
         utf8_offset(&self.text, r.start)..utf8_offset(&self.text, r.end)
     }
@@ -251,7 +269,7 @@ impl Render for TextField {
         div()
             .id("text-input")
             .role(Role::TextInput)
-            .aria_label(self.placeholder.clone())
+            .aria_label(self.placeholder_text().to_owned())
             .aria_value(self.text.clone())
             .track_focus(&self.focus)
             .overflow_hidden()
@@ -291,7 +309,7 @@ impl Render for TextField {
                         let this = a.read(cx);
                         let empty = this.text.is_empty();
                         let text: SharedString = if empty {
-                            this.placeholder.clone().into()
+                            this.placeholder_text().to_owned().into()
                         } else {
                             this.text.clone().into()
                         };

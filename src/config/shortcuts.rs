@@ -38,6 +38,7 @@ pub enum Action {
 
 pub struct Definition {
     pub id: &'static str,
+    /// Translation IDs, resolved when rendering or reporting a conflict.
     pub label: &'static str,
     pub group: &'static str,
     pub defaults: &'static [&'static str],
@@ -53,201 +54,213 @@ macro_rules! binding {
 // Source: microsoft/terminal, TerminalSettingsModel/defaults.json, keybindings.
 // GPUI spelling uses '-' separators and pageup/pagedown instead of pgup/pgdn.
 pub const DEFINITIONS: &[Definition] = &[
-    binding!("newTab", "새 탭", "탭과 창", Action::NewTab, "ctrl-shift-t"),
+    binding!(
+        "newTab",
+        "new_tab",
+        "tabs_and_windows",
+        Action::NewTab,
+        "ctrl-shift-t"
+    ),
     binding!(
         "duplicateTab",
-        "탭 복제",
-        "탭과 창",
+        "duplicate_tab",
+        "tabs_and_windows",
         Action::DuplicateTab,
         "ctrl-shift-d"
     ),
     binding!(
         "newWindow",
-        "새 창",
-        "탭과 창",
+        "new_window",
+        "tabs_and_windows",
         Action::NewWindow,
         "ctrl-shift-n"
     ),
     binding!(
         "closeTab",
-        "현재 탭 닫기",
-        "탭과 창",
+        "close_current_tab",
+        "tabs_and_windows",
         Action::CloseTab,
         "ctrl-shift-w"
     ),
     binding!(
         "closeWindow",
-        "창 닫기",
-        "탭과 창",
+        "close_window",
+        "tabs_and_windows",
         Action::CloseWindow,
         "alt-f4"
     ),
-    binding!("nextTab", "다음 탭", "탭과 창", Action::NextTab, "ctrl-tab"),
+    binding!(
+        "nextTab",
+        "next_tab",
+        "tabs_and_windows",
+        Action::NextTab,
+        "ctrl-tab"
+    ),
     binding!(
         "prevTab",
-        "이전 탭",
-        "탭과 창",
+        "previous_tab",
+        "tabs_and_windows",
         Action::PreviousTab,
         "ctrl-shift-tab"
     ),
     binding!(
         "switchToTab1",
-        "첫 번째 탭",
-        "탭 바로 가기",
+        "first_tab",
+        "switch_to_tab",
         Action::SwitchTab(0),
         "ctrl-alt-1"
     ),
     binding!(
         "switchToTab2",
-        "두 번째 탭",
-        "탭 바로 가기",
+        "second_tab",
+        "switch_to_tab",
         Action::SwitchTab(1),
         "ctrl-alt-2"
     ),
     binding!(
         "switchToTab3",
-        "세 번째 탭",
-        "탭 바로 가기",
+        "third_tab",
+        "switch_to_tab",
         Action::SwitchTab(2),
         "ctrl-alt-3"
     ),
     binding!(
         "switchToTab4",
-        "네 번째 탭",
-        "탭 바로 가기",
+        "fourth_tab",
+        "switch_to_tab",
         Action::SwitchTab(3),
         "ctrl-alt-4"
     ),
     binding!(
         "switchToTab5",
-        "다섯 번째 탭",
-        "탭 바로 가기",
+        "fifth_tab",
+        "switch_to_tab",
         Action::SwitchTab(4),
         "ctrl-alt-5"
     ),
     binding!(
         "switchToTab6",
-        "여섯 번째 탭",
-        "탭 바로 가기",
+        "sixth_tab",
+        "switch_to_tab",
         Action::SwitchTab(5),
         "ctrl-alt-6"
     ),
     binding!(
         "switchToTab7",
-        "일곱 번째 탭",
-        "탭 바로 가기",
+        "seventh_tab",
+        "switch_to_tab",
         Action::SwitchTab(6),
         "ctrl-alt-7"
     ),
     binding!(
         "switchToTab8",
-        "여덟 번째 탭",
-        "탭 바로 가기",
+        "eighth_tab",
+        "switch_to_tab",
         Action::SwitchTab(7),
         "ctrl-alt-8"
     ),
     binding!(
         "switchToLastTab",
-        "마지막 탭",
-        "탭 바로 가기",
+        "last_tab",
+        "switch_to_tab",
         Action::LastTab,
         "ctrl-alt-9"
     ),
     binding!(
         "newTabProfile1",
-        "프로필 1 실행",
-        "프로필",
+        "launch_profile_1",
+        "profiles",
         Action::NewProfile(0),
         "ctrl-shift-1"
     ),
     binding!(
         "newTabProfile2",
-        "프로필 2 실행",
-        "프로필",
+        "launch_profile_2",
+        "profiles",
         Action::NewProfile(1),
         "ctrl-shift-2"
     ),
     binding!(
         "newTabProfile3",
-        "프로필 3 실행",
-        "프로필",
+        "launch_profile_3",
+        "profiles",
         Action::NewProfile(2),
         "ctrl-shift-3"
     ),
     binding!(
         "newTabProfile4",
-        "프로필 4 실행",
-        "프로필",
+        "launch_profile_4",
+        "profiles",
         Action::NewProfile(3),
         "ctrl-shift-4"
     ),
     binding!(
         "newTabProfile5",
-        "프로필 5 실행",
-        "프로필",
+        "launch_profile_5",
+        "profiles",
         Action::NewProfile(4),
         "ctrl-shift-5"
     ),
     binding!(
         "newTabProfile6",
-        "프로필 6 실행",
-        "프로필",
+        "launch_profile_6",
+        "profiles",
         Action::NewProfile(5),
         "ctrl-shift-6"
     ),
     binding!(
         "newTabProfile7",
-        "프로필 7 실행",
-        "프로필",
+        "launch_profile_7",
+        "profiles",
         Action::NewProfile(6),
         "ctrl-shift-7"
     ),
     binding!(
         "newTabProfile8",
-        "프로필 8 실행",
-        "프로필",
+        "launch_profile_8",
+        "profiles",
         Action::NewProfile(7),
         "ctrl-shift-8"
     ),
     binding!(
         "newTabProfile9",
-        "프로필 9 실행",
-        "프로필",
+        "launch_profile_9",
+        "profiles",
         Action::NewProfile(8),
         "ctrl-shift-9"
     ),
     binding!(
         "openNewTabDropdown",
-        "프로필 메뉴",
-        "설정과 찾기",
+        "profile_menu",
+        "settings_and_search",
         Action::ProfileMenu,
         "ctrl-shift-space"
     ),
     binding!(
         "openSettings",
-        "설정 열기",
-        "설정과 찾기",
+        "open_settings",
+        "settings_and_search",
         Action::Settings,
         "ctrl-,"
     ),
     binding!(
         "openSettingsFile",
-        "설정 파일 열기",
-        "설정과 찾기",
+        "open_settings_file",
+        "settings_and_search",
         Action::SettingsFile,
         "ctrl-shift-,"
     ),
     binding!(
         "find",
-        "터미널에서 찾기",
-        "설정과 찾기",
+        "find_in_terminal",
+        "settings_and_search",
         Action::Find,
         "ctrl-shift-f"
     ),
     binding!(
         "copy",
-        "선택 영역 복사",
-        "클립보드",
+        "copy_selection",
+        "clipboard",
         Action::Copy,
         "ctrl-shift-c",
         "ctrl-insert",
@@ -255,89 +268,89 @@ pub const DEFINITIONS: &[Definition] = &[
     ),
     binding!(
         "selectAll",
-        "전체 선택",
-        "클립보드",
+        "select_all",
+        "clipboard",
         Action::SelectAll,
         "ctrl-shift-a"
     ),
     binding!(
         "paste",
-        "붙여넣기",
-        "클립보드",
+        "paste",
+        "clipboard",
         Action::Paste,
         "ctrl-shift-v",
         "shift-insert"
     ),
     binding!(
         "scrollUp",
-        "위로 스크롤",
-        "스크롤",
+        "scroll_up",
+        "scrolling",
         Action::ScrollUp,
         "ctrl-shift-up"
     ),
     binding!(
         "scrollDown",
-        "아래로 스크롤",
-        "스크롤",
+        "scroll_down",
+        "scrolling",
         Action::ScrollDown,
         "ctrl-shift-down"
     ),
     binding!(
         "scrollUpPage",
-        "한 페이지 위로 스크롤",
-        "스크롤",
+        "scroll_up_one_page",
+        "scrolling",
         Action::PageUp,
         "ctrl-shift-pageup"
     ),
     binding!(
         "scrollDownPage",
-        "한 페이지 아래로 스크롤",
-        "스크롤",
+        "scroll_down_one_page",
+        "scrolling",
         Action::PageDown,
         "ctrl-shift-pagedown"
     ),
     binding!(
         "scrollToTop",
-        "맨 위로 스크롤",
-        "스크롤",
+        "scroll_to_top",
+        "scrolling",
         Action::ScrollTop,
         "ctrl-shift-home"
     ),
     binding!(
         "scrollToBottom",
-        "맨 아래로 스크롤",
-        "스크롤",
+        "scroll_to_bottom",
+        "scrolling",
         Action::ScrollBottom,
         "ctrl-shift-end"
     ),
     binding!(
         "toggleFullscreen",
-        "전체 화면 전환",
-        "화면",
+        "toggle_full_screen",
+        "display",
         Action::Fullscreen,
         "alt-enter",
         "f11"
     ),
     binding!(
         "increaseFontSize",
-        "글꼴 크기 늘리기",
-        "화면",
+        "increase_font_size",
+        "display",
         Action::IncreaseFont,
         "ctrl-=",
         "ctrl-numpad_plus"
     ),
     binding!(
         "decreaseFontSize",
-        "글꼴 크기 줄이기",
-        "화면",
+        "decrease_font_size",
+        "display",
         Action::DecreaseFont,
         "ctrl--",
         "ctrl-numpad_minus"
     ),
     binding!(
         "resetFontSize",
-        "글꼴 크기 초기화",
-        "화면",
+        "reset_font_size",
+        "display",
         Action::ResetFont,
         "ctrl-0"
     ),
@@ -389,7 +402,7 @@ pub fn parse(text: &str) -> Result<Keystroke> {
             .and_then(|n| n.parse::<u8>().ok())
             .is_some_and(|n| (1..=24).contains(&n));
     if !valid || key.is_modifier_key() || key.key_char.is_some() {
-        bail!("사용할 수 없는 단축키: {text}");
+        bail!(crate::tf!("invalid_shortcut_text", text => text));
     }
     Ok(key)
 }
@@ -451,7 +464,7 @@ impl Bindings {
     pub fn new(overrides: &Overrides) -> Result<Self> {
         for id in overrides.keys() {
             if !DEFINITIONS.iter().any(|d| d.id == id) {
-                bail!("지원하지 않는 단축키 동작: {id}");
+                bail!(crate::tf!("unsupported_shortcut_action_id", id => id));
             }
         }
         let mut bindings = Vec::new();
@@ -463,10 +476,7 @@ impl Bindings {
                     used.insert((key.modifiers, key.key.clone()), definition.label)
                 {
                     bail!(
-                        "{}: ‘{}’와 ‘{}’의 단축키가 겹칩니다.",
-                        label(&text),
-                        previous,
-                        definition.label
+                        crate::tf!("arg0_shortcuts_for_arg1_and_arg2_overlap", arg0 => label(&text), arg1 => crate::i18n::tr(previous), arg2 => crate::i18n::tr(definition.label))
                     );
                 }
                 bindings.push((key, definition.action, definition.label));
@@ -493,7 +503,9 @@ impl Bindings {
                 (mapped.inner().modifiers, mapped.inner().key.clone()),
                 action,
             ) {
-                bail!("현재 키보드 배열에서 ‘{previous}’와 ‘{action}’의 단축키가 겹칩니다.");
+                bail!(
+                    crate::tf!("shortcuts_for_previous_and_action_overlap_in_the_current_keyboard_layo", previous => crate::i18n::tr(previous), action => crate::i18n::tr(action))
+                );
             }
         }
         Ok(())

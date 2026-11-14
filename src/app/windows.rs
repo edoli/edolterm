@@ -191,10 +191,10 @@ fn route_inner(
     request.validate()?;
     #[cfg(windows)]
     if request.handoff.is_some() != incoming.is_some() {
-        return Err("콘솔 연결 핸들을 전달받지 못했습니다.".into());
+        return Err(crate::i18n::tr("no_console_handoff_handles_were_received").into());
     }
     if cx.global::<Windows>().preserve_session {
-        return Err("Edolterm을 다시 시작하고 있습니다. 잠시 후 다시 시도하세요.".into());
+        return Err(crate::i18n::tr("edolterm_is_restarting_try_again_shortly").into());
     }
     let profile = request
         .profile
@@ -203,7 +203,7 @@ fn route_inner(
             platform::configured_profiles(&cx.global::<SharedSettings>().0)
                 .into_iter()
                 .find(|profile| &profile.id == id)
-                .ok_or_else(|| format!("프로필을 찾을 수 없습니다: {id}"))
+                .ok_or_else(|| crate::tf!("profile_not_found_id", id => id))
         })
         .transpose()?;
     let entries = cx.global::<Windows>().entries.clone();

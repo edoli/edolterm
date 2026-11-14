@@ -79,7 +79,7 @@ pub struct TerminalView {
     pub focus: FocusHandle,
     pub settings: Settings,
     pub search_match: Option<std::ops::RangeInclusive<TermPoint>>,
-    pub search_result: String,
+    pub search_result: &'static str,
     bounds: Bounds<Pixels>,
     cell_width: f32,
     cell_height: f32,
@@ -130,7 +130,7 @@ impl TerminalView {
             focus,
             settings,
             search_match: None,
-            search_result: String::new(),
+            search_result: "",
             bounds: Bounds::default(),
             cell_width: 9.,
             cell_height: 21.,
@@ -260,7 +260,9 @@ impl TerminalView {
             match SessionStarts::new() {
                 Ok(starts) => cx.set_global(starts),
                 Err(error) => {
-                    self.error = Some(format!("셸 시작 작업을 만들지 못했습니다: {error}"));
+                    self.error = Some(
+                        crate::tf!("failed_to_create_shell_startup_task_error", error => error),
+                    );
                     cx.notify();
                     return;
                 }
@@ -307,10 +309,11 @@ impl TerminalView {
         let result = startup.result.clone();
         self.startup = Some(startup);
         self.startup_task = Some(cx.spawn(async move |this, cx| {
-            let result = result
-                .recv()
-                .await
-                .unwrap_or_else(|_| Err(anyhow::anyhow!("셸 시작 작업이 종료되었습니다.")));
+            let result = result.recv().await.unwrap_or_else(|_| {
+                Err(anyhow::anyhow!(crate::i18n::tr(
+                    "the_shell_startup_task_ended"
+                )))
+            });
             let _ = this.update(cx, |this, cx| {
                 this.startup.take();
                 if this.exited {
@@ -527,15 +530,16 @@ impl TerminalView {
                 self.exited = true;
                 let success = status.success();
                 if !success {
-                    self.error = Some(format!("프로세스가 종료되었습니다: {status}"));
+                    self.error = Some(crate::tf!("the_process_exited_status", status => status));
                 }
                 cx.emit(TerminalEvent::Exited(success));
             }
             Event::Exit => {
                 if !self.exited {
                     self.exited = true;
-                    self.error
-                        .get_or_insert_with(|| "터미널 연결이 종료되었습니다.".into());
+                    self.error.get_or_insert_with(|| {
+                        crate::i18n::tr("the_terminal_connection_ended").into()
+                    });
                     cx.emit(TerminalEvent::Metadata);
                 }
             }
@@ -625,7 +629,7 @@ impl TerminalView {
     }
 
     pub fn search(&mut self, text: &str, backwards: bool, advance: bool, cx: &mut Context<Self>) {
-        self.search_result.clear();
+        self.search_result = "";
         if text.is_empty() {
             self.search_match = None;
             cx.notify();
@@ -674,9 +678,9 @@ impl TerminalView {
         );
         if let Some(m) = &self.search_match {
             term.scroll_to_point(*m.start());
-            self.search_result = "일치 항목".into();
+            self.search_result = "match_found";
         } else {
-            self.search_result = "일치 항목 없음".into();
+            self.search_result = "no_matches";
         }
         cx.notify();
     }
@@ -1372,7 +1376,7 @@ impl Render for TerminalView {
                             .top(px(8.))
                             .text_color(theme.terminal.fg)
                             .text_size(px(13.))
-                            .child("셸 시작 중…"),
+                            .child(crate::i18n::tr("starting_shell")),
                     )
                 },
             )

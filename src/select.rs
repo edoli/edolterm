@@ -64,7 +64,7 @@ impl Select {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let search = cx.new(|cx| TextField::new("", "글꼴 검색", cx));
+        let search = cx.new(|cx| TextField::localized("", "search_fonts", cx));
         let focus = cx.focus_handle().tab_stop(true);
         let mut subscriptions = vec![
             cx.subscribe(&search, |this, _, event, cx| {
@@ -381,7 +381,7 @@ impl Render for Select {
                     div()
                         .p_2()
                         .text_color(theme.muted)
-                        .child("글꼴 목록 불러오는 중…"),
+                        .child(crate::i18n::tr("loading_fonts")),
                 );
             }
             if self.filtered.is_empty() {
@@ -389,7 +389,7 @@ impl Render for Select {
                     div()
                         .p_2()
                         .text_color(theme.muted)
-                        .child("검색 결과가 없습니다."),
+                        .child(crate::i18n::tr("no_results_found")),
                 );
             } else {
                 popup = popup.child(

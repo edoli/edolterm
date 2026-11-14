@@ -15,21 +15,23 @@ pub(super) enum SettingsPage {
 impl SettingsPage {
     fn label(self) -> &'static str {
         match self {
-            Self::Behavior => "동작",
-            Self::Appearance => "모양",
-            Self::ColorSchemes => "색 구성표",
-            Self::Profiles => "프로필",
-            Self::Shortcuts => "단축키",
+            Self::Behavior => crate::i18n::tr("behavior"),
+            Self::Appearance => crate::i18n::tr("appearance"),
+            Self::ColorSchemes => crate::i18n::tr("color_schemes"),
+            Self::Profiles => crate::i18n::tr("profiles"),
+            Self::Shortcuts => crate::i18n::tr("keyboard_shortcuts"),
         }
     }
 
     fn description(self) -> &'static str {
         match self {
-            Self::ColorSchemes => {
-                "터미널의 배경, 글자와 ANSI 색상을 선택합니다. 저장하면 모든 터미널에 적용됩니다."
-            }
-            Self::Shortcuts => "Windows Terminal의 기본 키를 사용합니다. 구현된 기능만 표시됩니다.",
-            _ => "설정은 저장하면 열린 터미널에도 적용됩니다.",
+            Self::ColorSchemes => crate::i18n::tr(
+                "choose_the_terminal_background_text_and_ansi_colors_save_to_apply_to_a",
+            ),
+            Self::Shortcuts => crate::i18n::tr(
+                "uses_windows_terminal_default_shortcuts_only_implemented_actions_are_s",
+            ),
+            _ => crate::i18n::tr("save_settings_to_apply_them_to_open_terminals"),
         }
     }
 }
@@ -71,6 +73,7 @@ pub(super) struct ProfileSearch {
 impl Global for ProfileSearch {}
 
 pub(super) struct Preferences {
+    pub(super) language: Entity<Select>,
     pub(super) profile: Entity<Select>,
     pub(super) behavior: Entity<Select>,
     pub(super) theme: Entity<Select>,
@@ -158,18 +161,26 @@ impl Render for NumberInput {
                     .flex_col()
                     .gap(px(1.))
                     .child(
-                        icon_button("increase", Icon::ArrowUp, "값 늘리기", theme)
-                            .w(px(26.))
-                            .h(px(17.))
-                            .on_click(cx.listener(|this, _, window, cx| this.step(1., window, cx))),
+                        icon_button(
+                            "increase",
+                            Icon::ArrowUp,
+                            crate::i18n::tr("increase_value"),
+                            theme,
+                        )
+                        .w(px(26.))
+                        .h(px(17.))
+                        .on_click(cx.listener(|this, _, window, cx| this.step(1., window, cx))),
                     )
                     .child(
-                        icon_button("decrease", Icon::ArrowDown, "값 줄이기", theme)
-                            .w(px(26.))
-                            .h(px(17.))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.step(-1., window, cx)),
-                            ),
+                        icon_button(
+                            "decrease",
+                            Icon::ArrowDown,
+                            crate::i18n::tr("decrease_value"),
+                            theme,
+                        )
+                        .w(px(26.))
+                        .h(px(17.))
+                        .on_click(cx.listener(|this, _, window, cx| this.step(-1., window, cx))),
                     ),
             )
     }
@@ -194,7 +205,7 @@ impl TerminalApp {
                     .py_2()
                     .text_size(px(16.))
                     .font_weight(FontWeight::BOLD)
-                    .child("설정"),
+                    .child(crate::i18n::tr("settings")),
             )
             .children(
                 [
@@ -212,7 +223,7 @@ impl TerminalApp {
                             page == SettingsPage::Behavior && self.has_update(cx),
                             |button| {
                                 button
-                                    .aria_label("동작 · 업데이트 있음")
+                                    .aria_label(crate::i18n::tr("behavior_update_available"))
                                     .child(update_dot(theme).ml_2())
                             },
                         )
@@ -281,8 +292,34 @@ impl TerminalApp {
             && !self.dir.join("settings.toml").exists()
             && let Err(error) = self.settings.save(&self.dir)
         {
-            self.status = Some(format!("설정 파일을 만들지 못했습니다: {error:#}"));
+            self.status = Some(
+                crate::tf!("failed_to_create_settings_file_error", error => format!("{:#}", error)),
+            );
         }
+        let language = cx.new(|cx| {
+            let mut choices = vec![Choice::new(
+                "system",
+                crate::i18n::tr("follow_system_language"),
+            )];
+            choices.extend(
+                crate::i18n::LOCALES
+                    .iter()
+                    .map(|locale| Choice::new(locale.code, locale.native_name)),
+            );
+            Select::new(
+                crate::i18n::tr("language"),
+                choices,
+                if self.draft.language == "system" {
+                    "system"
+                } else {
+                    crate::i18n::locale_for_tag(&self.draft.language).code
+                }
+                .into(),
+                false,
+                window,
+                cx,
+            )
+        });
         let selected_profile = self
             .profiles
             .iter()
@@ -292,7 +329,7 @@ impl TerminalApp {
             .unwrap_or_default();
         let profile = cx.new(|cx| {
             Select::new(
-                "기본 프로필",
+                crate::i18n::tr("default_profile"),
                 self.profiles
                     .iter()
                     .map(|p| {
@@ -308,7 +345,7 @@ impl TerminalApp {
         });
         let behavior = cx.new(|cx| {
             Select::new(
-                "새 인스턴스 동작",
+                crate::i18n::tr("new_instance_behavior"),
                 config::WindowingBehavior::ALL
                     .into_iter()
                     .enumerate()
@@ -326,11 +363,15 @@ impl TerminalApp {
         });
         let theme = cx.new(|cx| {
             Select::new(
-                "테마",
-                [("system", "시스템"), ("dark", "다크"), ("light", "라이트")]
-                    .into_iter()
-                    .map(|(value, label)| Choice::new(value, label))
-                    .collect(),
+                crate::i18n::tr("theme"),
+                [
+                    ("system", crate::i18n::tr("system")),
+                    ("dark", crate::i18n::tr("dark")),
+                    ("light", crate::i18n::tr("light")),
+                ]
+                .into_iter()
+                .map(|(value, label)| Choice::new(value, label))
+                .collect(),
                 self.draft.theme.clone(),
                 false,
                 window,
@@ -339,7 +380,7 @@ impl TerminalApp {
         });
         let font = cx.new(|cx| {
             Select::new(
-                "터미널 글꼴",
+                crate::i18n::tr("terminal_font"),
                 vec![Choice::new(
                     self.draft.font_family.clone(),
                     self.draft.font_family.clone(),
@@ -350,15 +391,39 @@ impl TerminalApp {
                 cx,
             )
         });
-        let size =
-            cx.new(|cx| NumberInput::new("글꼴 크기", self.draft.font_size, 8., 48., 1., cx));
-        let line_height =
-            cx.new(|cx| NumberInput::new("줄 높이 배율", self.draft.line_height, 0.5, 3., 0.1, cx));
-        let cell_width =
-            cx.new(|cx| NumberInput::new("셀 너비 배율", self.draft.cell_width, 0.3, 2., 0.05, cx));
+        let size = cx.new(|cx| {
+            NumberInput::new(
+                crate::i18n::tr("font_size"),
+                self.draft.font_size,
+                8.,
+                48.,
+                1.,
+                cx,
+            )
+        });
+        let line_height = cx.new(|cx| {
+            NumberInput::new(
+                crate::i18n::tr("line_height_multiplier"),
+                self.draft.line_height,
+                0.5,
+                3.,
+                0.1,
+                cx,
+            )
+        });
+        let cell_width = cx.new(|cx| {
+            NumberInput::new(
+                crate::i18n::tr("cell_width_multiplier"),
+                self.draft.cell_width,
+                0.3,
+                2.,
+                0.05,
+                cx,
+            )
+        });
         let history = cx.new(|cx| {
             NumberInput::new(
-                "스크롤백 줄 수",
+                crate::i18n::tr("scrollback_lines"),
                 self.draft.scrollback,
                 0.,
                 1_000_000.,
@@ -367,6 +432,10 @@ impl TerminalApp {
             )
         });
         let mut subscriptions = vec![
+            cx.subscribe(&language, |this, _, event: &Selected, cx| {
+                this.draft.language = event.0.clone();
+                cx.notify();
+            }),
             cx.subscribe(&profile, |this, _, event: &Selected, cx| {
                 this.draft.default_profile = event.0.clone();
                 cx.notify();
@@ -400,6 +469,7 @@ impl TerminalApp {
             }));
         }
         self.preferences = Some(Preferences {
+            language,
             profile,
             behavior,
             theme,
@@ -430,23 +500,21 @@ impl TerminalApp {
                 .size
                 .read(cx)
                 .value(cx)
-                .ok_or("글꼴 크기에 8–48 사이의 숫자를 입력하세요.")?;
+                .ok_or(crate::i18n::tr("enter_a_font_size_between_8_and_48"))?;
             let history = prefs
                 .history
                 .read(cx)
                 .value(cx)
                 .filter(|value| value.fract() == 0.)
-                .ok_or("스크롤백에 0–1000000 사이의 정수를 입력하세요.")?;
-            let line_height = prefs
-                .line_height
-                .read(cx)
-                .value(cx)
-                .ok_or("줄 높이 배율에 0.5–3.0 사이의 숫자를 입력하세요.")?;
-            let cell_width = prefs
-                .cell_width
-                .read(cx)
-                .value(cx)
-                .ok_or("셀 너비 배율에 0.3–2.0 사이의 숫자를 입력하세요.")?;
+                .ok_or(crate::i18n::tr(
+                    "enter_a_scrollback_integer_between_0_and_1000000",
+                ))?;
+            let line_height = prefs.line_height.read(cx).value(cx).ok_or(crate::i18n::tr(
+                "enter_a_line_height_multiplier_between_0_5_and_3_0",
+            ))?;
+            let cell_width = prefs.cell_width.read(cx).value(cx).ok_or(crate::i18n::tr(
+                "enter_a_cell_width_multiplier_between_0_3_and_2_0",
+            ))?;
             settings.font_size = size as f32;
             settings.line_height = line_height as f32;
             settings.cell_width = cell_width as f32;
@@ -460,13 +528,18 @@ impl TerminalApp {
             return;
         }
         if self.config_error {
-            self.status = Some("설정 파일 오류를 해결한 뒤 프로필을 검색해 주세요.".into());
+            self.status = Some(
+                crate::i18n::tr("fix_the_settings_file_errors_before_searching_for_profiles")
+                    .into(),
+            );
             cx.notify();
             return;
         }
         cx.set_global(ProfileSearch {
             searching: true,
-            message: Some("설치된 셸과 WSL 배포판을 검색하고 있습니다…".into()),
+            message: Some(
+                crate::i18n::tr("searching_for_installed_shells_and_wsl_distributions").into(),
+            ),
         });
         let dir = self.dir.clone();
         cx.spawn(async move |_, cx| {
@@ -481,9 +554,9 @@ impl TerminalApp {
                 let message = match settings.save(&dir) {
                     Ok(()) => {
                         cx.set_global(windows::SharedSettings(settings));
-                        format!("{count}개 프로필을 찾아 저장했습니다.")
+                        crate::tf!("found_and_saved_count_profiles", count => count)
                     }
-                    Err(error) => format!("검색 결과를 저장하지 못했습니다: {error:#}"),
+                    Err(error) => crate::tf!("failed_to_save_search_results_error", error => format!("{:#}", error)),
                 };
                 cx.set_global(ProfileSearch {
                     searching: false,
@@ -507,40 +580,251 @@ impl TerminalApp {
         match self.settings_page {
             SettingsPage::Behavior => content
                 .child(self.update_view(theme, cx))
-                .child(setting("기본 프로필", "새 탭의 + 버튼으로 실행할 셸입니다.", theme, self.draft.default_profile != self.settings.default_profile, selector(&prefs.profile)))
+                .child(setting(
+                    crate::i18n::tr("language"),
+                    crate::i18n::tr("language_description"),
+                    theme,
+                    self.draft.language != self.settings.language,
+                    selector(&prefs.language),
+                ))
+                .child(setting(
+                    crate::i18n::tr("default_profile"),
+                    crate::i18n::tr("the_shell_launched_by_the_button_for_new_tabs"),
+                    theme,
+                    self.draft.default_profile != self.settings.default_profile,
+                    selector(&prefs.profile),
+                ))
                 .when(cfg!(windows), |content| {
                     #[cfg(windows)]
-                    { content.child(setting("Windows 기본 터미널", "새로 실행하는 콘솔을 Edolterm으로 엽니다.", theme, false,
-                        div().flex().flex_wrap().gap_2()
-                            .child(settings_button("set-default-terminal", "기본 터미널로 설정", theme).on_click(cx.listener(|this, _, _, cx| this.change_default_terminal(false, cx))))
-                            .child(settings_button("restore-default-terminal", "이전 설정 복원", theme).on_click(cx.listener(|this, _, _, cx| this.change_default_terminal(true, cx)))))) }
+                    {
+                        content.child(setting(
+                            crate::i18n::tr("windows_default_terminal"),
+                            crate::i18n::tr("open_newly_launched_consoles_in_edolterm"),
+                            theme,
+                            false,
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .gap_2()
+                                .child(
+                                    settings_button(
+                                        "set-default-terminal",
+                                        crate::i18n::tr("set_as_default_terminal"),
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.change_default_terminal(false, cx),
+                                    )),
+                                )
+                                .child(
+                                    settings_button(
+                                        "restore-default-terminal",
+                                        crate::i18n::tr("restore_previous_setting"),
+                                        theme,
+                                    )
+                                    .on_click(cx.listener(
+                                        |this, _, _, cx| this.change_default_terminal(true, cx),
+                                    )),
+                                ),
+                        ))
+                    }
                     #[cfg(not(windows))]
-                    { content }
+                    {
+                        content
+                    }
                 })
-                .child(setting("새 인스턴스 동작", "탐색기나 바로 가기에서 실행할 때 사용할 창입니다. 대상 창이 없으면 새 창을 만듭니다.", theme, self.draft.windowing_behavior != self.settings.windowing_behavior, selector(&prefs.behavior)))
-                .child(setting("스크롤백", "탭마다 보관할 줄 수입니다. 최대 1,000,000줄까지 설정할 수 있습니다.", theme, prefs.history.read(cx).value(cx) != Some(self.settings.scrollback as f64), number(&prefs.history)))
-                .child(setting("Ctrl+스크롤로 글꼴 크기 조절", "Ctrl을 누른 채 위로 스크롤하면 현재 탭의 글꼴을 확대하고, 아래로 스크롤하면 축소합니다.", theme, self.draft.ctrl_scroll_zoom != self.settings.ctrl_scroll_zoom,
-                    div().flex().justify_end().child(toggle("ctrl-scroll-zoom", "Ctrl+스크롤로 글꼴 크기 조절", self.draft.ctrl_scroll_zoom, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.ctrl_scroll_zoom = !this.draft.ctrl_scroll_zoom; cx.notify(); })))))
-                .child(setting("URL 자동 감지", "일반 URL과 OSC 8 링크를 감지합니다. Ctrl을 누르면 밑줄로 표시하고, Ctrl+클릭으로 엽니다.", theme, self.draft.detect_urls != self.settings.detect_urls,
-                    div().flex().justify_end().child(toggle("detect-urls", "URL 자동 감지", self.draft.detect_urls, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.detect_urls = !this.draft.detect_urls; cx.notify(); })))))
-                .child(setting("창을 닫을 때 확인", "열린 세션이 있으면 창을 닫기 전에 확인합니다.", theme, self.draft.confirm_close != self.settings.confirm_close,
-                    div().flex().justify_end().child(toggle("confirm-close", "창을 닫을 때 확인", self.draft.confirm_close, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.confirm_close = !this.draft.confirm_close; cx.notify(); })))))
-                .child(setting("세션 복원", "다음 실행 시 탭과 시작 폴더를 복원합니다. 실행 중인 명령과 출력은 복원되지 않습니다.", theme, self.draft.restore_session != self.settings.restore_session,
-                    div().flex().justify_end().child(toggle("restore-session", "세션 복원", self.draft.restore_session, theme).on_click(cx.listener(|this, _, _, cx| { this.draft.restore_session = !this.draft.restore_session; cx.notify(); }))))),
+                .child(setting(
+                    crate::i18n::tr("new_instance_behavior"),
+                    crate::i18n::tr(
+                        "the_window_used_when_launching_from_explorer_or_a_shortcut_creates_a_w",
+                    ),
+                    theme,
+                    self.draft.windowing_behavior != self.settings.windowing_behavior,
+                    selector(&prefs.behavior),
+                ))
+                .child(setting(
+                    crate::i18n::tr("scrollback"),
+                    crate::i18n::tr("the_number_of_lines_kept_per_tab_up_to_1_000_000"),
+                    theme,
+                    prefs.history.read(cx).value(cx) != Some(self.settings.scrollback as f64),
+                    number(&prefs.history),
+                ))
+                .child(setting(
+                    crate::i18n::tr("zoom_with_ctrl_scroll"),
+                    crate::i18n::tr(
+                        "hold_ctrl_and_scroll_up_to_increase_the_current_tab_s_font_size_or_dow",
+                    ),
+                    theme,
+                    self.draft.ctrl_scroll_zoom != self.settings.ctrl_scroll_zoom,
+                    div().flex().justify_end().child(
+                        toggle(
+                            "ctrl-scroll-zoom",
+                            crate::i18n::tr("zoom_with_ctrl_scroll"),
+                            self.draft.ctrl_scroll_zoom,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.draft.ctrl_scroll_zoom = !this.draft.ctrl_scroll_zoom;
+                            cx.notify();
+                        })),
+                    ),
+                ))
+                .child(setting(
+                    crate::i18n::tr("detect_urls_automatically"),
+                    crate::i18n::tr(
+                        "detect_plain_urls_and_osc_8_links_hold_ctrl_to_underline_them_ctrl_cli",
+                    ),
+                    theme,
+                    self.draft.detect_urls != self.settings.detect_urls,
+                    div().flex().justify_end().child(
+                        toggle(
+                            "detect-urls",
+                            crate::i18n::tr("detect_urls_automatically"),
+                            self.draft.detect_urls,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.draft.detect_urls = !this.draft.detect_urls;
+                            cx.notify();
+                        })),
+                    ),
+                ))
+                .child(setting(
+                    crate::i18n::tr("confirm_when_closing_a_window"),
+                    crate::i18n::tr("ask_before_closing_a_window_with_open_sessions"),
+                    theme,
+                    self.draft.confirm_close != self.settings.confirm_close,
+                    div().flex().justify_end().child(
+                        toggle(
+                            "confirm-close",
+                            crate::i18n::tr("confirm_when_closing_a_window"),
+                            self.draft.confirm_close,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.draft.confirm_close = !this.draft.confirm_close;
+                            cx.notify();
+                        })),
+                    ),
+                ))
+                .child(setting(
+                    crate::i18n::tr("restore_session"),
+                    crate::i18n::tr(
+                        "restore_tabs_and_starting_directories_on_the_next_launch_running_comma",
+                    ),
+                    theme,
+                    self.draft.restore_session != self.settings.restore_session,
+                    div().flex().justify_end().child(
+                        toggle(
+                            "restore-session",
+                            crate::i18n::tr("restore_session"),
+                            self.draft.restore_session,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.draft.restore_session = !this.draft.restore_session;
+                            cx.notify();
+                        })),
+                    ),
+                )),
             SettingsPage::Appearance => content
-                .child(setting("테마", "시스템을 선택하면 운영체제의 테마 설정을 따릅니다.", theme, self.draft.theme != self.settings.theme, selector(&prefs.theme)))
-                .child(setting("터미널 글꼴", "설치된 글꼴을 검색해 선택합니다. 터미널에는 고정폭 글꼴을 권장합니다.", theme, self.draft.font_family != self.settings.font_family, selector(&prefs.font)))
-                .child(setting("글꼴 크기", "터미널의 글꼴 크기입니다. 8–48 px 사이로 설정합니다.", theme, prefs.size.read(cx).value(cx).map(|value| value as f32) != Some(self.settings.font_size), number(&prefs.size)))
-                .child(setting("줄 높이", "글꼴 크기에 곱할 배율입니다. 기본값 1.2 · 범위 0.5–3.0", theme, prefs.line_height.read(cx).value(cx).map(|value| value as f32) != Some(self.settings.line_height), number(&prefs.line_height)))
-                .child(setting("셀 너비", "글꼴 크기에 곱할 가로 폭의 배율입니다. 기본값 0.6 · 범위 0.3–2.0", theme, prefs.cell_width.read(cx).value(cx).map(|value| value as f32) != Some(self.settings.cell_width), number(&prefs.cell_width))),
+                .child(setting(
+                    crate::i18n::tr("theme"),
+                    crate::i18n::tr("system_follows_the_operating_system_theme"),
+                    theme,
+                    self.draft.theme != self.settings.theme,
+                    selector(&prefs.theme),
+                ))
+                .child(setting(
+                    crate::i18n::tr("terminal_font"),
+                    crate::i18n::tr(
+                        "search_and_select_an_installed_font_monospaced_fonts_are_recommended_f",
+                    ),
+                    theme,
+                    self.draft.font_family != self.settings.font_family,
+                    selector(&prefs.font),
+                ))
+                .child(setting(
+                    crate::i18n::tr("font_size"),
+                    crate::i18n::tr("terminal_font_size_from_8_to_48_px"),
+                    theme,
+                    prefs.size.read(cx).value(cx).map(|value| value as f32)
+                        != Some(self.settings.font_size),
+                    number(&prefs.size),
+                ))
+                .child(setting(
+                    crate::i18n::tr("line_height"),
+                    crate::i18n::tr("multiplied_by_the_font_size_default_1_2_range_0_5_3_0"),
+                    theme,
+                    prefs
+                        .line_height
+                        .read(cx)
+                        .value(cx)
+                        .map(|value| value as f32)
+                        != Some(self.settings.line_height),
+                    number(&prefs.line_height),
+                ))
+                .child(setting(
+                    crate::i18n::tr("cell_width"),
+                    crate::i18n::tr(
+                        "horizontal_width_multiplied_by_the_font_size_default_0_6_range_0_3_2_0",
+                    ),
+                    theme,
+                    prefs
+                        .cell_width
+                        .read(cx)
+                        .value(cx)
+                        .map(|value| value as f32)
+                        != Some(self.settings.cell_width),
+                    number(&prefs.cell_width),
+                )),
             SettingsPage::Profiles => content
-                .child(setting("프로필 자동 검색", "시스템에 있는 쉘을 자동으로 검색해 저장된 목록을 갱신합니다.", theme, false,
-                    settings_button("discover-profiles", if cx.global::<ProfileSearch>().searching { "검색 중…" } else { "프로필 검색" }, theme)
-                        .on_click(cx.listener(|this, _, _, cx| this.search_profiles(cx)))))
-                .when_some(cx.global::<ProfileSearch>().message.clone(), |content, message| content.child(div().px_5().text_size(px(12.)).text_color(theme.muted).child(message)))
-                .child(div().mt_5().mb_2().text_size(px(16.)).font_weight(FontWeight::BOLD).child("사용자 지정 프로필"))
-                .child(div().text_color(theme.description).child("하단의 ‘설정 파일 열기’로 파일을 열고 [[profiles]]에 실행 파일, 인자, 시작 폴더, 환경변수를 추가할 수 있습니다. 편집한 뒤 ‘설정 다시 불러오기’를 누르세요."))
-                .child(div().mt_2().text_size(px(12.)).text_color(theme.muted).child(self.dir.join("settings.toml").display().to_string())),
+                .child(setting(
+                    crate::i18n::tr("discover_profiles"),
+                    crate::i18n::tr("find_installed_shells_and_update_the_saved_profile_list"),
+                    theme,
+                    false,
+                    settings_button(
+                        "discover-profiles",
+                        if cx.global::<ProfileSearch>().searching {
+                            crate::i18n::tr("searching")
+                        } else {
+                            crate::i18n::tr("search_profiles")
+                        },
+                        theme,
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| this.search_profiles(cx))),
+                ))
+                .when_some(
+                    cx.global::<ProfileSearch>().message.clone(),
+                    |content, message| {
+                        content.child(
+                            div()
+                                .px_5()
+                                .text_size(px(12.))
+                                .text_color(theme.muted)
+                                .child(message),
+                        )
+                    },
+                )
+                .child(
+                    div()
+                        .mt_5()
+                        .mb_2()
+                        .text_size(px(16.))
+                        .font_weight(FontWeight::BOLD)
+                        .child(crate::i18n::tr("custom_profiles")),
+                )
+                .child(div().text_color(theme.description).child(crate::i18n::tr(
+                    "use_open_settings_file_below_to_add_programs_arguments_starting_direct",
+                )))
+                .child(
+                    div()
+                        .mt_2()
+                        .text_size(px(12.))
+                        .text_color(theme.muted)
+                        .child(self.dir.join("settings.toml").display().to_string()),
+                ),
             SettingsPage::Shortcuts | SettingsPage::ColorSchemes => unreachable!(),
         }
     }
@@ -627,12 +911,16 @@ impl TerminalApp {
                     .items_center()
                     .gap_2()
                     .child(
-                        settings_button("reload-config", "설정 다시 불러오기", theme)
+                        settings_button("reload-config", crate::i18n::tr("reload_settings"), theme)
                             .on_click(cx.listener(|this, _, _, cx| this.reload_settings(cx))),
                     )
                     .child(
-                        settings_button("edit-config", "설정 파일 열기", theme)
-                            .on_click(cx.listener(|this, _, _, cx| this.open_settings_file(cx))),
+                        settings_button(
+                            "edit-config",
+                            crate::i18n::tr("open_settings_file"),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.open_settings_file(cx))),
                     ),
             )
             .child(
@@ -644,18 +932,25 @@ impl TerminalApp {
                     .gap_2()
                     .ml_auto()
                     .child(
-                        settings_button("reset-settings", "모두 기본값으로", theme)
-                            .on_click(cx.listener(|this, _, _, cx| this.reset_settings(cx))),
+                        settings_button(
+                            "reset-settings",
+                            crate::i18n::tr("reset_all_to_defaults"),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.reset_settings(cx))),
                     )
                     .child(
-                        settings_button("cancel-settings", "변경 내용 취소", theme).on_click(
-                            cx.listener(|this, _, _, cx| this.cancel_settings_changes(cx)),
-                        ),
+                        settings_button(
+                            "cancel-settings",
+                            crate::i18n::tr("discard_changes"),
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| this.cancel_settings_changes(cx))),
                     )
                     .child(
                         settings_action(
                             "save-settings",
-                            "설정 저장",
+                            crate::i18n::tr("save_settings"),
                             theme,
                             self.has_settings_changes(cx),
                         )
@@ -668,7 +963,7 @@ impl TerminalApp {
 #[cfg(windows)]
 impl TerminalApp {
     fn change_default_terminal(&mut self, restore: bool, cx: &mut Context<Self>) {
-        self.status = Some("기본 터미널 설정을 변경하고 있습니다…".into());
+        self.status = Some(crate::i18n::tr("changing_the_default_terminal_setting").into());
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -677,7 +972,9 @@ impl TerminalApp {
             let _ = this.update(cx, |this, cx| {
                 this.status = Some(match result {
                     Ok(message) if !message.is_empty() => message,
-                    Ok(_) => "기본 터미널 설정을 확인했습니다.".into(),
+                    Ok(_) => {
+                        crate::i18n::tr("the_default_terminal_setting_has_been_checked").into()
+                    }
                     Err(error) => format!("{error:#}"),
                 });
                 cx.notify();
@@ -702,11 +999,11 @@ fn toggle(id: &'static str, label: &'static str, enabled: bool, theme: Theme) ->
         .items_center()
         .gap_3()
         .cursor_pointer()
-        .child(
-            div()
-                .text_color(theme.muted)
-                .child(if enabled { "켬" } else { "끔" }),
-        )
+        .child(div().text_color(theme.muted).child(if enabled {
+            crate::i18n::tr("on")
+        } else {
+            crate::i18n::tr("off")
+        }))
         .child(
             div()
                 .flex()

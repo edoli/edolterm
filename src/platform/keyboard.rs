@@ -35,7 +35,10 @@ pub(crate) fn install() -> anyhow::Result<MessageHook> {
             GetCurrentThreadId(),
         )
     };
-    anyhow::ensure!(!hook.is_null(), "키보드 입력 구분을 초기화하지 못했습니다.");
+    anyhow::ensure!(
+        !hook.is_null(),
+        crate::i18n::tr("failed_to_initialize_keyboard_input_handling")
+    );
     Ok(MessageHook(hook))
 }
 

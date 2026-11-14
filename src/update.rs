@@ -25,17 +25,19 @@ impl Version {
         let mut parts = text.split('.');
         let mut numbers = [0; 3];
         for number in &mut numbers {
-            let part = parts.next().ok_or_else(|| anyhow!("잘못된 버전입니다"))?;
+            let part = parts
+                .next()
+                .ok_or_else(|| anyhow!(crate::i18n::tr("invalid_version")))?;
             if part.is_empty()
                 || !part.bytes().all(|b| b.is_ascii_digit())
                 || (part.len() > 1 && part.starts_with('0'))
             {
-                return Err(anyhow!("잘못된 버전입니다"));
+                return Err(anyhow!(crate::i18n::tr("invalid_version")));
             }
             *number = part.parse()?;
         }
         if parts.next().is_some() {
-            return Err(anyhow!("잘못된 버전입니다"));
+            return Err(anyhow!(crate::i18n::tr("invalid_version")));
         }
         Ok(Self(numbers))
     }
@@ -69,19 +71,23 @@ impl Release {
         let version = response
             .tag_name
             .strip_prefix('v')
-            .ok_or_else(|| anyhow!("잘못된 릴리스 태그입니다"))?
+            .ok_or_else(|| anyhow!(crate::i18n::tr("invalid_release_tag")))?
             .to_owned();
         Version::parse(&version)?;
         let asset = response
             .assets
             .into_iter()
             .find(|asset| asset.name == package)
-            .ok_or_else(|| anyhow!("현재 플랫폼의 업데이트 파일이 없습니다"))?;
+            .ok_or_else(|| {
+                anyhow!(crate::i18n::tr(
+                    "no_update_file_is_available_for_this_platform"
+                ))
+            })?;
         let sha256 = asset
             .digest
             .as_deref()
             .and_then(|digest| digest.strip_prefix("sha256:"))
-            .ok_or_else(|| anyhow!("업데이트 파일의 SHA-256 정보가 없습니다"))?
+            .ok_or_else(|| anyhow!(crate::i18n::tr("the_update_file_has_no_sha_256_checksum")))?
             .to_owned();
         if response.draft
             || response.prerelease
@@ -90,7 +96,7 @@ impl Release {
             || sha256.len() != 64
             || !sha256.bytes().all(|b| b.is_ascii_hexdigit())
         {
-            return Err(anyhow!("잘못된 업데이트 정보입니다"));
+            return Err(anyhow!(crate::i18n::tr("invalid_update_information")));
         }
         Ok(Self {
             version,
@@ -159,16 +165,18 @@ pub fn check() -> Result<State> {
         return Ok(State::NoRelease);
     }
     if status != 200 {
-        return Err(anyhow!("업데이트 서버 응답: {status}"));
+        return Err(anyhow!(
+            crate::tf!("update_server_response_status", status => status)
+        ));
     }
     let response: ApiRelease = serde_json::from_slice(&bytes)?;
     if response.draft || response.prerelease {
-        return Err(anyhow!("정식 릴리스가 아닙니다"));
+        return Err(anyhow!(crate::i18n::tr("not_a_stable_release")));
     }
     let version = response
         .tag_name
         .strip_prefix('v')
-        .ok_or_else(|| anyhow!("잘못된 릴리스 태그입니다"))?;
+        .ok_or_else(|| anyhow!(crate::i18n::tr("invalid_release_tag")))?;
     if Version::parse(version)? <= Version::parse(VERSION)? {
         return Ok(State::Current);
     }

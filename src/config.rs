@@ -17,6 +17,8 @@ impl gpui::Global for SharedSettings {}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Settings {
+    /// BCP-47 language code, or "system" to follow the Windows display language.
+    pub language: String,
     pub default_profile: String,
     pub font_family: String,
     pub font_size: f32,
@@ -44,6 +46,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            language: "system".into(),
             default_profile: String::new(),
             font_family: if cfg!(windows) {
                 "Cascadia Mono"
@@ -86,9 +89,11 @@ impl WindowingBehavior {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::NewWindow => "새 창 만들기",
-            Self::AnyDesktop => "가장 최근에 사용한 창에 첨부",
-            Self::CurrentDesktop => "이 데스크톱에서 가장 최근에 사용한 창에 첨부",
+            Self::NewWindow => crate::i18n::tr("create_a_new_window"),
+            Self::AnyDesktop => crate::i18n::tr("attach_to_the_most_recently_used_window"),
+            Self::CurrentDesktop => {
+                crate::i18n::tr("attach_to_the_most_recently_used_window_on_this_desktop")
+            }
         }
     }
 }
@@ -123,25 +128,25 @@ impl Settings {
     pub fn validate(&self) -> Result<()> {
         shortcuts::Bindings::new(&self.keybindings)?;
         if !self.font_size.is_finite() || !(8. ..=48.).contains(&self.font_size) {
-            bail!("글꼴 크기는 8–48이어야 합니다.");
+            bail!(crate::i18n::tr("font_size_must_be_between_8_and_48"));
         }
         if !self.line_height.is_finite() || !(0.5..=3.).contains(&self.line_height) {
-            bail!("줄 높이 배율은 0.5–3.0이어야 합니다.");
+            bail!(crate::i18n::tr("line_height_must_be_between_0_5_and_3_0"));
         }
         if !self.cell_width.is_finite() || !(0.3..=2.).contains(&self.cell_width) {
-            bail!("셀 너비 배율은 0.3–2.0이어야 합니다.");
+            bail!(crate::i18n::tr("cell_width_must_be_between_0_3_and_2_0"));
         }
         if self.font_family.trim().is_empty() {
-            bail!("글꼴 이름을 입력하세요.");
+            bail!(crate::i18n::tr("enter_a_font_family_name"));
         }
         if self.scrollback > 1_000_000 {
-            bail!("스크롤백은 최대 1,000,000줄입니다.");
+            bail!(crate::i18n::tr("scrollback_cannot_exceed_1_000_000_lines"));
         }
         if !matches!(self.theme.as_str(), "dark" | "light" | "system") {
-            bail!("theme은 dark, light 또는 system이어야 합니다.");
+            bail!(crate::i18n::tr("theme_must_be_dark_light_or_system"));
         }
         if crate::config::color_schemes::find(&self.color_scheme).is_none() {
-            bail!("알 수 없는 색 구성표: {}", self.color_scheme);
+            bail!(crate::tf!("unknown_color_scheme_arg0", arg0 => self.color_scheme));
         }
         // Validate each list independently: user profiles may override discoveries.
         for profiles in [&self.profiles, &self.discovered_profiles] {
@@ -149,13 +154,17 @@ impl Settings {
             for p in profiles {
                 if p.id.trim().is_empty() || p.name.trim().is_empty() || p.program.trim().is_empty()
                 {
-                    bail!("프로필의 id, name, program은 비워둘 수 없습니다.");
+                    bail!(crate::i18n::tr(
+                        "profile_id_name_and_program_cannot_be_empty"
+                    ));
                 }
                 if !ids.insert(&p.id) {
-                    bail!("중복된 프로필 id: {}", p.id);
+                    bail!(crate::tf!("duplicate_profile_id_arg0", arg0 => p.id));
                 }
                 if p.program.contains('\0') || p.args.iter().any(|s| s.contains('\0')) {
-                    bail!("실행 파일과 인자에는 NUL 문자를 사용할 수 없습니다.");
+                    bail!(crate::i18n::tr(
+                        "the_program_and_arguments_cannot_contain_nul_characters"
+                    ));
                 }
             }
         }
@@ -169,9 +178,9 @@ impl Settings {
         }
         let settings: Self = toml::from_str(
             &std::fs::read_to_string(&path)
-                .with_context(|| format!("{} 읽기 실패", path.display()))?,
+                .with_context(|| crate::tf!("failed_to_read_arg0", arg0 => path.display()))?,
         )
-        .context("settings.toml 형식 오류")?;
+        .context(crate::i18n::tr("invalid_settings_toml_format"))?;
         settings.validate()?;
         Ok(settings)
     }
@@ -206,7 +215,9 @@ pub fn directory() -> PathBuf {
 /// Replace in the same directory, including existing files on Windows.
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
-    let parent = path.parent().context("저장 경로에 상위 폴더가 없습니다.")?;
+    let parent = path
+        .parent()
+        .context(crate::i18n::tr("the_save_path_has_no_parent_directory"))?;
     std::fs::create_dir_all(parent)?;
     let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
     let result = (|| -> Result<()> {
@@ -220,7 +231,7 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     if result.is_err() {
         let _ = std::fs::remove_file(tmp);
     }
-    result.with_context(|| format!("{} 저장 실패", path.display()))
+    result.with_context(|| crate::tf!("failed_to_save_arg0", arg0 => path.display()))
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -265,6 +276,20 @@ impl SavedSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn language_defaults_for_legacy_settings_and_round_trips() {
+        let legacy: Settings = toml::from_str("font_size = 14.0").unwrap();
+        assert_eq!(legacy.language, "system");
+        for language in ["system", "en", "ko", "fr-FR"] {
+            let settings = Settings {
+                language: language.into(),
+                ..Settings::default()
+            };
+            let parsed: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+            assert_eq!(parsed.language, language);
+            parsed.validate().unwrap();
+        }
+    }
     #[test]
     fn color_schemes_default_for_legacy_settings_and_persist() {
         let legacy: Settings = toml::from_str("theme = 'light'").unwrap();

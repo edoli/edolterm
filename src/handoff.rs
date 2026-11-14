@@ -43,7 +43,7 @@ pub struct Descriptor {
 impl Descriptor {
     pub fn validate(&self) -> Result<()> {
         if self.pid == 0 || self.title.len() > 32768 {
-            bail!("잘못된 콘솔 연결 요청입니다.");
+            bail!(crate::i18n::tr("invalid_console_handoff_request"));
         }
         validate_values(&self.handles)
     }
@@ -80,7 +80,7 @@ impl Incoming {
             if unsafe { GetHandleInformation(value as HANDLE, &mut flags) } == 0
                 || flags & HANDLE_FLAG_INHERIT == 0
             {
-                bail!("상속된 콘솔 핸들이 올바르지 않습니다.");
+                bail!(crate::i18n::tr("invalid_inherited_console_handles"));
             }
         }
         let handles = values.map(|value| unsafe { OwnedHandle::from_raw_handle(value as _) });
@@ -92,7 +92,7 @@ impl Incoming {
         }
         Ok(Self {
             handles,
-            title: "외부 콘솔".into(),
+            title: crate::i18n::tr("external_console").into(),
         })
     }
 
@@ -106,7 +106,7 @@ impl Incoming {
 
     pub fn duplicate(descriptor: &Descriptor, peer: u32) -> Result<Self> {
         if descriptor.pid != peer || descriptor.title.len() > 32768 {
-            bail!("콘솔 연결 요청의 발신자가 일치하지 않습니다.");
+            bail!(crate::i18n::tr("the_console_handoff_sender_does_not_match"));
         }
         descriptor.validate()?;
         let source = unsafe { OpenProcess(PROCESS_DUP_HANDLE, 0, peer) };
@@ -143,7 +143,7 @@ impl Incoming {
 fn validate_values(values: &[usize; 7]) -> Result<()> {
     for (i, value) in values.iter().enumerate() {
         if *value == 0 || *value >= isize::MAX as usize || values[..i].contains(value) {
-            bail!("콘솔 핸들이 비어 있거나 중복되었습니다.");
+            bail!(crate::i18n::tr("console_handles_are_empty_or_duplicated"));
         }
     }
     Ok(())
@@ -155,7 +155,7 @@ fn parse_handles(text: &str) -> Result<[usize; 7]> {
         .collect::<std::result::Result<_, _>>()?;
     let values: [usize; 7] = values
         .try_into()
-        .map_err(|_| anyhow::anyhow!("콘솔 핸들 개수가 올바르지 않습니다."))?;
+        .map_err(|_| anyhow::anyhow!(crate::i18n::tr("invalid_number_of_console_handles")))?;
     validate_values(&values)?;
     Ok(values)
 }
@@ -185,8 +185,9 @@ fn api() -> Result<&'static Api> {
                 )
             };
             if module.is_null() {
-                return Err(io::Error::last_os_error())
-                    .context("기본 터미널에는 함께 배포된 conpty.dll이 필요합니다");
+                return Err(io::Error::last_os_error()).context(crate::i18n::tr(
+                    "default_terminal_support_requires_the_bundled_conpty_dll",
+                ));
             }
             unsafe {
                 Ok(Api {
@@ -234,10 +235,12 @@ pub fn change_default(restore: bool) -> Result<String> {
     use std::os::windows::process::CommandExt;
     let helper = std::env::current_exe()?
         .parent()
-        .context("실행 경로")?
+        .context(crate::i18n::tr("executable_path"))?
         .join("shell-integration/windows-default-terminal.ps1");
     if !helper.is_file() {
-        bail!("Edolterm 설치형을 설치한 뒤 사용하세요.");
+        bail!(crate::i18n::tr(
+            "install_the_packaged_version_of_edolterm_first"
+        ));
     }
     let shell = std::path::PathBuf::from(std::env::var_os("SystemRoot").context("SystemRoot")?)
         .join("System32/WindowsPowerShell/v1.0/powershell.exe");
@@ -283,7 +286,9 @@ impl Pty {
             )
         };
         if result < 0 {
-            bail!("콘솔 연결 실패: 0x{:08x}", result as u32);
+            bail!(
+                crate::tf!("console_handoff_failed_0x_arg0", arg0 => format!("{:08x}", result as u32))
+            );
         }
         // Pack takes ownership on success.
         let _ = (
@@ -295,7 +300,7 @@ impl Pty {
         // Release our reference so the host exits after the LAST client exits.
         // Watching the first client alone would close consoles with live children.
         if unsafe { (api.release)(handle) } < 0 {
-            bail!("콘솔 수명 연결 실패");
+            bail!(crate::i18n::tr("failed_to_attach_the_console_lifetime"));
         }
         Ok(Self {
             console,

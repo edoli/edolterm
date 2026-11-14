@@ -125,7 +125,7 @@ impl Scope {
         let groups = token_info(token.as_raw_handle(), TokenLogonSid)?;
         let groups = unsafe { &*groups.as_ptr().cast::<TOKEN_GROUPS>() };
         if groups.GroupCount != 1 {
-            bail!("로그인 세션을 확인할 수 없습니다.");
+            bail!(crate::i18n::tr("unable_to_identify_the_login_session"));
         }
         let mut sid_string = null_mut();
         if unsafe { ConvertSidToStringSidW(groups.Groups[0].Sid, &mut sid_string) } == 0 {
@@ -291,7 +291,7 @@ fn transfer(pipe: HANDLE, buffer: &mut [u8], writing: bool, stop: HANDLE) -> io:
 fn send<T: Serialize>(pipe: HANDLE, value: &T, stop: HANDLE) -> Result<()> {
     let mut body = serde_json::to_vec(value)?;
     if body.len() > MAX_PACKET {
-        bail!("실행 요청이 너무 큽니다.");
+        bail!(crate::i18n::tr("the_launch_request_is_too_large"));
     }
     transfer(pipe, &mut (body.len() as u32).to_le_bytes(), true, stop)?;
     transfer(pipe, &mut body, true, stop)?;
@@ -302,7 +302,7 @@ fn receive<T: DeserializeOwned>(pipe: HANDLE, stop: HANDLE) -> Result<T> {
     transfer(pipe, &mut length, false, stop)?;
     let length = u32::from_le_bytes(length) as usize;
     if length == 0 || length > MAX_PACKET {
-        bail!("잘못된 실행 요청 크기입니다.");
+        bail!(crate::i18n::tr("invalid_launch_request_size"));
     }
     let mut body = vec![0; length];
     transfer(pipe, &mut body, false, stop)?;
@@ -413,8 +413,7 @@ pub fn start(dir: &Path, request: Request) -> Result<Outcome> {
         }
         if ownership != WAIT_TIMEOUT {
             bail!(
-                "실행 중인 Edolterm 확인 실패: {}",
-                io::Error::last_os_error()
+                crate::tf!("failed_to_check_for_running_edolterm_arg0", arg0 => io::Error::last_os_error())
             );
         }
         let pipe = unsafe {
@@ -440,7 +439,7 @@ pub fn start(dir: &Path, request: Request) -> Result<Outcome> {
             let stop = event()?;
             send(pipe.as_raw_handle(), &request, stop.as_raw_handle())?;
             let reply: Reply = receive(pipe.as_raw_handle(), stop.as_raw_handle()).context(
-                "실행 중인 Edolterm이 요청에 응답하지 않습니다. 잠시 후 다시 시도하세요.",
+                crate::i18n::tr("the_running_edolterm_is_not_responding_try_again_shortly"),
             )?;
             transfer(pipe.as_raw_handle(), &mut [1], true, stop.as_raw_handle())?;
             if let Some(error) = reply.error {
@@ -456,7 +455,9 @@ pub fn start(dir: &Path, request: Request) -> Result<Outcome> {
             return Err(error.into());
         }
         if began.elapsed() > Duration::from_secs(8) {
-            bail!("Edolterm이 시작 또는 종료 중입니다. 잠시 후 다시 시도하세요.");
+            bail!(crate::i18n::tr(
+                "edolterm_is_starting_or_shutting_down_try_again_shortly"
+            ));
         }
         thread::sleep(Duration::from_millis(25));
     }

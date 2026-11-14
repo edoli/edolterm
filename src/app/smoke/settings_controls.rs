@@ -350,7 +350,119 @@ pub(super) async fn run(
     })??;
     profile_search(root, handle, cx).await?;
     narrow_layout(root, handle, cx).await?;
+    languages(root, handle, cx).await?;
     Ok(())
+}
+
+async fn languages(
+    root: &Entity<TerminalApp>,
+    handle: AnyWindowHandle,
+    cx: &mut AsyncApp,
+) -> Result<()> {
+    let (original, active, page) = root.read_with(cx, |app, _| {
+        (app.settings.clone(), app.active, app.settings_page)
+    });
+    let second = cx.update(windows::open_default)?;
+    let second_entry = cx.update(|cx| {
+        cx.global::<windows::Windows>()
+            .entries
+            .iter()
+            .find(|entry| entry.root.upgrade().is_some_and(|entity| entity == second))
+            .unwrap()
+            .clone()
+    });
+    second_entry.handle.update(cx, |app, window, cx| {
+        app.settings_tab(window, cx);
+    })?;
+    handle.update(cx, |_, window, _| window.activate_window())?;
+    cx.background_executor()
+        .timer(Duration::from_millis(150))
+        .await;
+    let outcome = (|| -> Result<()> {
+        for (index, code) in ["en", "ko", "system"].into_iter().enumerate() {
+            let select = handle.update(cx, |_, window, cx| -> Result<Entity<Select>> {
+                root.update(cx, |app, cx| app.settings_tab(window, cx));
+                show_page(root, SettingsPage::Behavior, window, cx);
+                let select = root.read(cx).preferences.as_ref().unwrap().language.clone();
+                select.update(cx, |select, cx| select.toggle(window, cx));
+                draw(window, cx);
+                for _ in 0..3 {
+                    press("up", window, cx)?;
+                }
+                let target = match code {
+                    "en" => 1,
+                    "ko" => 2,
+                    _ => 0,
+                };
+                for _ in 0..target {
+                    press("down", window, cx)?;
+                }
+                press("enter", window, cx)?;
+                Ok(select)
+            })??;
+            handle.update(cx, |_, window, cx| -> Result<()> {
+            ensure!(
+                root.read(cx).draft.language == code,
+                "language selector did not update draft (wanted={code}, draft={}, selected={}, open={})",
+                root.read(cx).draft.language, select.read(cx).selected, select.read(cx).open
+            );
+            root.update(cx, |app, cx| app.save_settings(cx));
+            draw(window, cx);
+            ensure!(
+                Settings::load(&root.read(cx).dir)?.language == code,
+                "language did not persist"
+            );
+            if index < 2 {
+                ensure!(
+                    crate::i18n::tr("settings") == if code == "ko" { "설정" } else { "Settings" },
+                    "UI language did not switch"
+                );
+            }
+            window
+                .render_to_image()?
+                .save(root.read(cx).dir.join(format!("language-{code}.png")))?;
+            Ok(())
+        })??;
+            second_entry
+                .handle
+                .update(cx, |app, window, cx| -> Result<()> {
+                    app.ensure_preferences(window, cx);
+                    ensure!(
+                        app.settings.language == code && app.draft.language == code,
+                        "language did not reach the second window"
+                    );
+                    ensure!(
+                        app.preferences.as_ref().unwrap().language.read(cx).selected == code,
+                        "second window selector was not rebuilt"
+                    );
+                    Ok(())
+                })??;
+        }
+        handle.update(cx, |_, window, cx| -> Result<()> {
+            root.update(cx, |app, cx| {
+                app.draft.language = "ko".into();
+                app.cancel_settings_changes(cx);
+            });
+            ensure!(
+                root.read(cx).draft.language == "system",
+                "cancel applied a language change"
+            );
+            root.update(cx, |app, cx| {
+                app.draft = original;
+                app.preferences = None;
+                app.save_settings(cx);
+                app.settings_page = page;
+                app.activate(active, window, cx);
+            });
+            draw(window, cx);
+            Ok(())
+        })??;
+        Ok(())
+    })();
+    let _ = second_entry
+        .handle
+        .update(cx, |app, window, cx| app.close_window(window, cx));
+    outcome
 }
 
 async fn narrow_layout(

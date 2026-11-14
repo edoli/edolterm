@@ -24,7 +24,9 @@ pub struct Request {
 impl Request {
     pub fn new(directory: Option<PathBuf>, new_window: bool) -> anyhow::Result<Self> {
         let mut nonce = [0; 16];
-        getrandom::fill(&mut nonce).map_err(|e| anyhow::anyhow!("실행 요청 생성 실패: {e}"))?;
+        getrandom::fill(&mut nonce).map_err(|e| {
+            anyhow::anyhow!(crate::tf!("failed_to_create_launch_request_e", e => e))
+        })?;
         Ok(Self {
             version: 1,
             id: nonce.iter().map(|byte| format!("{byte:02x}")).collect(),
@@ -41,7 +43,10 @@ impl Request {
         if let Some(handoff) = &self.handoff {
             handoff.validate().map_err(|error| error.to_string())?;
             if self.profile.is_some() || self.directory.is_some() {
-                return Err("전달된 콘솔에는 프로필이나 시작 폴더를 지정할 수 없습니다.".into());
+                return Err(crate::i18n::tr(
+                    "a_console_handoff_cannot_specify_a_profile_or_starting_directory",
+                )
+                .into());
             }
         }
         #[cfg(windows)]
@@ -54,17 +59,17 @@ impl Request {
         let valid_version = self.version == 1;
         if !valid_version || self.id.len() != 32 || !self.id.bytes().all(|b| b.is_ascii_hexdigit())
         {
-            return Err("호환되지 않는 Edolterm 실행 요청입니다.".into());
+            return Err(crate::i18n::tr("incompatible_edolterm_launch_request").into());
         }
         if let Some(path) = &self.directory
             && (!path.is_absolute() || !path.is_dir())
         {
-            return Err(format!("시작 폴더를 찾을 수 없습니다: {}", path.display()));
+            return Err(crate::tf!("starting_directory_not_found_arg0", arg0 => path.display()));
         }
         if let Some(profile) = &self.profile
             && (profile.trim().is_empty() || profile.contains('\0'))
         {
-            return Err("프로필 ID가 비어 있거나 올바르지 않습니다.".into());
+            return Err(crate::i18n::tr("the_profile_id_is_empty_or_invalid").into());
         }
         Ok(())
     }

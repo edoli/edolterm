@@ -15,7 +15,7 @@ impl Tab {
             self.terminal
                 .as_ref()
                 .map(|terminal| terminal.read(cx).title.clone())
-                .unwrap_or_else(|| "설정".into())
+                .unwrap_or_else(|| crate::i18n::tr("settings").into())
         })
     }
 }
@@ -70,7 +70,7 @@ impl TerminalApp {
         self.finish_tab_drag(true, window, cx);
         self.activate(index, window, cx);
         let title = self.tabs[index].title(cx);
-        let input = cx.new(|cx| TextField::new(title, "탭 이름", cx));
+        let input = cx.new(|cx| TextField::localized(title, "tab_name", cx));
         let subscription = cx.subscribe_in(
             &input,
             window,
@@ -163,14 +163,16 @@ impl TerminalApp {
                         div()
                             .text_size(px(18.))
                             .font_weight(FontWeight::BOLD)
-                            .child("탭 이름 변경"),
+                            .child(crate::i18n::tr("rename_tab")),
                     )
                     .child(rename.input.clone())
                     .child(
                         div()
                             .text_size(px(12.))
                             .text_color(theme.muted)
-                            .child("이름을 비우면 셸이 제공하는 자동 제목을 사용합니다."),
+                            .child(crate::i18n::tr(
+                                "leave_the_name_empty_to_use_the_shell_s_automatic_title",
+                            )),
                     )
                     .child(
                         div()
@@ -178,18 +180,24 @@ impl TerminalApp {
                             .justify_end()
                             .gap_2()
                             .child(
-                                settings_button("cancel-rename-tab", "취소", theme).on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.finish_tab_rename(false, window, cx)
-                                    }),
-                                ),
+                                settings_button(
+                                    "cancel-rename-tab",
+                                    crate::i18n::tr("cancel"),
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| this.finish_tab_rename(false, window, cx),
+                                )),
                             )
                             .child(
-                                primary_settings_button("save-rename-tab", "저장", theme).on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.finish_tab_rename(true, window, cx)
-                                    }),
-                                ),
+                                primary_settings_button(
+                                    "save-rename-tab",
+                                    crate::i18n::tr("save"),
+                                    theme,
+                                )
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| this.finish_tab_rename(true, window, cx),
+                                )),
                             ),
                     ),
             )
@@ -611,13 +619,13 @@ impl TerminalApp {
                 div()
                     .id(("close-tab", id))
                     .role(Role::Button)
-                    .aria_label("탭 닫기")
+                    .aria_label(crate::i18n::tr("close_tab"))
                     .when(!floating, |button| {
                         let shortcut = self.shortcut_label(keybindings::Action::CloseTab);
                         let tooltip = if shortcut.is_empty() {
-                            "탭 닫기".into()
+                            crate::i18n::tr("close_tab").into()
                         } else {
-                            format!("탭 닫기 · {shortcut}")
+                            crate::tf!("close_tab_shortcut", shortcut => shortcut)
                         };
                         button.block_mouse_except_scroll().tooltip(tip(tooltip))
                     })

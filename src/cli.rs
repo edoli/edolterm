@@ -23,7 +23,9 @@ impl Options {
                 .and_then(|s| s.strip_prefix("--terminal-handoff="))
             {
                 if options.handoff.is_some() {
-                    bail!("콘솔 연결은 한 번만 지정할 수 있습니다.");
+                    bail!(crate::i18n::tr(
+                        "console_handoff_can_only_be_specified_once"
+                    ));
                 }
                 options.handoff = Some(crate::handoff::Incoming::inherit(value)?);
                 continue;
@@ -36,7 +38,7 @@ impl Options {
                 options
                     .handoff
                     .as_mut()
-                    .context("콘솔 연결 없이 제목을 지정할 수 없습니다.")?
+                    .context(crate::i18n::tr("a_title_requires_a_console_handoff"))?
                     .title = title.into();
                 continue;
             }
@@ -47,7 +49,7 @@ impl Options {
             let profile = if arg == "--profile" || arg == "-p" {
                 Some(
                     args.next()
-                        .context("--profile 뒤에 프로필 ID를 지정하세요.")?,
+                        .context(crate::i18n::tr("specify_a_profile_id_after_profile"))?,
                 )
             } else {
                 arg.to_str()
@@ -55,20 +57,21 @@ impl Options {
                     .map(OsString::from)
             };
             if let Some(profile) = profile {
-                let profile = profile
-                    .into_string()
-                    .map_err(|_| anyhow::anyhow!("프로필 ID는 유효한 Unicode여야 합니다."))?;
+                let profile = profile.into_string().map_err(|_| {
+                    anyhow::anyhow!(crate::i18n::tr("the_profile_id_must_be_valid_unicode"))
+                })?;
                 if profile.trim().is_empty() || profile.contains('\0') {
-                    bail!("프로필 ID가 비어 있거나 올바르지 않습니다.");
+                    bail!(crate::i18n::tr("the_profile_id_is_empty_or_invalid"));
                 }
                 if options.profile.replace(profile).is_some() {
-                    bail!("프로필은 한 번만 지정할 수 있습니다.");
+                    bail!(crate::i18n::tr("the_profile_can_only_be_specified_once"));
                 }
                 continue;
             }
             let directory = if arg == "--working-directory" || arg == "-d" {
-                args.next()
-                    .context("--working-directory 뒤에 폴더 경로를 지정하세요.")?
+                args.next().context(crate::i18n::tr(
+                    "specify_a_folder_path_after_working_directory",
+                ))?
             } else if let Some(path) = arg
                 .to_str()
                 .and_then(|s| s.strip_prefix("--working-directory="))
@@ -80,17 +83,19 @@ impl Options {
                     options.smoke_mode = Some(mode.into());
                     continue;
                 }
-                bail!("알 수 없는 실행 인자: {}", arg.to_string_lossy());
+                bail!(crate::tf!("unknown_launch_argument_arg0", arg0 => arg.to_string_lossy()));
             };
             if options.working_directory.is_some() {
-                bail!("시작 폴더는 한 번만 지정할 수 있습니다.");
+                bail!(crate::i18n::tr(
+                    "the_starting_directory_can_only_be_specified_once"
+                ));
             }
             if directory.is_empty() {
-                bail!("시작 폴더 경로가 비어 있습니다.");
+                bail!(crate::i18n::tr("the_starting_directory_path_is_empty"));
             }
             let path = std::path::absolute(PathBuf::from(directory))?;
             if !path.is_dir() {
-                bail!("시작 폴더를 찾을 수 없습니다: {}", path.display());
+                bail!(crate::tf!("starting_directory_not_found_arg0", arg0 => path.display()));
             }
             options.working_directory = Some(path);
         }
@@ -98,7 +103,9 @@ impl Options {
         if options.handoff.is_some()
             && (options.profile.is_some() || options.working_directory.is_some())
         {
-            bail!("전달된 콘솔에는 프로필이나 시작 폴더를 지정할 수 없습니다.");
+            bail!(crate::i18n::tr(
+                "a_console_handoff_cannot_specify_a_profile_or_starting_directory"
+            ));
         }
         Ok(options)
     }

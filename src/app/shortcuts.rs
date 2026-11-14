@@ -177,7 +177,8 @@ impl TerminalApp {
             return false;
         }
         self.draft.keybindings = overrides;
-        self.status = Some("단축키를 변경했습니다. ‘설정 저장’을 누르면 적용됩니다.".into());
+        self.status =
+            Some(crate::i18n::tr("shortcuts_changed_select_save_settings_to_apply").into());
         cx.notify();
         true
     }
@@ -230,7 +231,7 @@ impl TerminalApp {
                         .pb_2()
                         .font_weight(FontWeight::BOLD)
                         .text_color(theme.accent)
-                        .child(group),
+                        .child(crate::i18n::tr(group)),
                 );
             }
             let id = definition.id;
@@ -243,7 +244,11 @@ impl TerminalApp {
                 .justify_end()
                 .gap_2();
             if keys.is_empty() {
-                chips = chips.child(div().text_color(theme.muted).child("지정 안 됨"));
+                chips = chips.child(
+                    div()
+                        .text_color(theme.muted)
+                        .child(crate::i18n::tr("unassigned")),
+                );
             }
             for (index, key) in keys.iter().enumerate() {
                 let recording = self.shortcut_capture == Some((id, Some(index)));
@@ -265,7 +270,7 @@ impl TerminalApp {
                             button(
                                 ("shortcut-edit", row * 100 + index),
                                 if recording {
-                                    "키 입력 중…".into()
+                                    crate::i18n::tr("press_keys").into()
                                 } else {
                                     keybindings::label(key)
                                 },
@@ -284,8 +289,8 @@ impl TerminalApp {
                             div()
                                 .id(("shortcut-remove", row * 100 + index))
                                 .role(Role::Button)
-                                .aria_label("단축키 삭제")
-                                .tooltip(tip("단축키 삭제".into()))
+                                .aria_label(crate::i18n::tr("remove_shortcut"))
+                                .tooltip(tip(crate::i18n::tr("remove_shortcut").into()))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -316,9 +321,9 @@ impl TerminalApp {
                 settings_button(
                     ("shortcut-add", row),
                     if self.shortcut_capture == Some((id, None)) {
-                        "키 입력 중…"
+                        crate::i18n::tr("press_keys")
                     } else {
-                        "+ 추가"
+                        crate::i18n::tr("add")
                     },
                     theme,
                 )
@@ -331,7 +336,7 @@ impl TerminalApp {
             );
             if self.draft.keybindings.contains_key(id) {
                 chips = chips.child(
-                    settings_button(("shortcut-reset", row), "기본값", theme)
+                    settings_button(("shortcut-reset", row), crate::i18n::tr("default"), theme)
                         .px_2()
                         .h(px(30.))
                         .on_click(cx.listener(move |this, _, _, cx| {
@@ -356,14 +361,31 @@ impl TerminalApp {
                         div()
                             .min_w(px(135.))
                             .flex_shrink_0()
-                            .child(definition.label),
+                            .child(crate::i18n::tr(definition.label)),
                     )
                     .child(chips),
             );
         }
-        div().flex().flex_col().gap_2()
-            .child(div().text_color(theme.muted).text_size(px(12.)).child("키를 클릭해 변경하거나 ‘+ 추가’를 누른 뒤 키 조합을 누르세요. Esc는 입력 취소입니다."))
-            .child(div().text_color(theme.muted).text_size(px(12.)).child("Enter 복사는 터미널에 선택 영역이 있을 때만 작동합니다. 글꼴 크기 단축키는 현재 탭에 적용됩니다."))
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_color(theme.muted)
+                    .text_size(px(12.))
+                    .child(crate::i18n::tr(
+                        "click_a_shortcut_or_add_then_press_a_key_combination_esc_cancels_recor",
+                    )),
+            )
+            .child(
+                div()
+                    .text_color(theme.muted)
+                    .text_size(px(12.))
+                    .child(crate::i18n::tr(
+                        "enter_copies_only_when_the_terminal_has_a_selection_font_size_shortcut",
+                    )),
+            )
             .child(rows)
     }
 }

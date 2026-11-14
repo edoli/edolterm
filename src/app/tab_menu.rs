@@ -26,14 +26,14 @@ impl TabAction {
 
     fn label(self) -> &'static str {
         match self {
-            Self::Color => "탭 색 변경",
-            Self::Rename => "탭 이름 바꾸기",
-            Self::Duplicate => "탭 복제",
-            Self::Export => "텍스트 내보내기",
-            Self::Find => "찾기",
-            Self::CloseOthers => "다른 탭 닫기",
-            Self::CloseRight => "오른쪽 탭들 닫기",
-            Self::Close => "탭 닫기",
+            Self::Color => crate::i18n::tr("change_tab_color"),
+            Self::Rename => crate::i18n::tr("rename_tab"),
+            Self::Duplicate => crate::i18n::tr("duplicate_tab"),
+            Self::Export => crate::i18n::tr("export_text"),
+            Self::Find => crate::i18n::tr("find"),
+            Self::CloseOthers => crate::i18n::tr("close_other_tabs"),
+            Self::CloseRight => crate::i18n::tr("close_tabs_to_the_right"),
+            Self::Close => crate::i18n::tr("close_tab"),
         }
     }
 
@@ -60,22 +60,22 @@ impl TabAction {
 }
 
 const COLORS: [(&str, u32); 16] = [
-    ("빨강", 0xe74856),
-    ("주황", 0xf28c28),
-    ("노랑", 0xe5c54b),
-    ("초록", 0x16a365),
-    ("청록", 0x21b6a8),
-    ("하늘", 0x3a96dd),
-    ("파랑", 0x3b78ff),
-    ("남색", 0x6963d9),
-    ("보라", 0x9b59b6),
-    ("자홍", 0xd457a6),
-    ("분홍", 0xef9aab),
-    ("갈색", 0xa77853),
-    ("회색", 0x888888),
-    ("은색", 0xbbbbbb),
-    ("흰색", 0xf2f2f2),
-    ("검정", 0x303030),
+    ("red", 0xe74856),
+    ("orange", 0xf28c28),
+    ("yellow", 0xe5c54b),
+    ("green", 0x16a365),
+    ("teal", 0x21b6a8),
+    ("sky_blue", 0x3a96dd),
+    ("blue", 0x3b78ff),
+    ("indigo", 0x6963d9),
+    ("purple", 0x9b59b6),
+    ("magenta", 0xd457a6),
+    ("pink", 0xef9aab),
+    ("brown", 0xa77853),
+    ("gray", 0x888888),
+    ("silver", 0xbbbbbb),
+    ("white", 0xf2f2f2),
+    ("black", 0x303030),
 ];
 
 pub(super) struct TabMenu {
@@ -278,9 +278,11 @@ impl TerminalApp {
             .await;
             let _ = this.update(cx, |this, cx| {
                 this.status = match result {
-                    Ok(Some(path)) => Some(format!("텍스트를 저장했습니다: {}", path.display())),
+                    Ok(Some(path)) => Some(crate::tf!("text_saved_arg0", arg0 => path.display())),
                     Ok(None) => return,
-                    Err(error) => Some(format!("텍스트 내보내기 실패: {error:#}")),
+                    Err(error) => Some(
+                        crate::tf!("failed_to_export_text_error", error => format!("{:#}", error)),
+                    ),
                 };
                 cx.notify();
             });
@@ -365,22 +367,31 @@ impl TerminalApp {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation());
         if menu.colors {
-            panel = panel.child(div().px_3().py_2().child("탭 색 변경"));
+            panel = panel.child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .child(crate::i18n::tr("change_tab_color")),
+            );
             panel = panel.child(
                 div().px_3().pb_2().child(
-                    settings_button("reset-tab-color", "기본 색으로 복원", theme)
-                        .w_full()
-                        .on_mouse_move(cx.listener(|this, _, _, cx| {
-                            if let Some(menu) = &mut this.tab_menu
-                                && menu.index != 0
-                            {
-                                menu.index = 0;
-                                cx.notify();
-                            }
-                        }))
-                        .on_click(
-                            cx.listener(|this, _, window, cx| this.set_tab_color(None, window, cx)),
-                        ),
+                    settings_button(
+                        "reset-tab-color",
+                        crate::i18n::tr("restore_default_color"),
+                        theme,
+                    )
+                    .w_full()
+                    .on_mouse_move(cx.listener(|this, _, _, cx| {
+                        if let Some(menu) = &mut this.tab_menu
+                            && menu.index != 0
+                        {
+                            menu.index = 0;
+                            cx.notify();
+                        }
+                    }))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.set_tab_color(None, window, cx)),
+                    ),
                 ),
             );
             let current = self
@@ -391,6 +402,7 @@ impl TerminalApp {
             for (row_index, colors) in COLORS.chunks(4).enumerate() {
                 let mut row = div().flex().gap_2().px_3().py_1();
                 for (column, &(name, color)) in colors.iter().enumerate() {
+                    let name = crate::i18n::tr(name);
                     let index = row_index * 4 + column + 1;
                     row = row.child(
                         div()
@@ -624,7 +636,7 @@ mod tests {
                     app.status
                         .as_deref()
                         .unwrap()
-                        .contains("텍스트 내보내기 실패")
+                        .contains(&crate::tf!("failed_to_export_text_error", error => ""))
                 );
                 for tab in &app.tabs {
                     if let Some(terminal) = &tab.terminal {

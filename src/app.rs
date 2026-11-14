@@ -118,7 +118,7 @@ impl TerminalApp {
         cx: &mut Context<Self>,
     ) -> Self {
         let update_state = cx.default_global::<updates::Checks>().state.clone();
-        let search = cx.new(|cx| TextField::new("", "터미널에서 찾기", cx));
+        let search = cx.new(|cx| TextField::localized("", "find_in_terminal", cx));
         let subscriptions = vec![
             cx.observe_global::<updates::Checks>(|this, cx| {
                 if !matches!(
@@ -168,6 +168,7 @@ impl TerminalApp {
             }),
             cx.observe_global::<windows::SharedSettings>(|this, cx| {
                 let settings = cx.global::<windows::SharedSettings>().0.clone();
+                crate::i18n::set_language(&settings.language);
                 if this.settings != settings {
                     let mut previous = this.settings.clone();
                     previous.discovered_profiles = settings.discovered_profiles.clone();
@@ -748,7 +749,7 @@ impl TerminalApp {
         };
         self.preferences = None;
         self.shortcut_capture = None;
-        self.status = Some("설정을 기본값으로 되돌렸습니다. 저장하면 적용됩니다.".into());
+        self.status = Some(crate::i18n::tr("settings_reset_to_defaults_save_to_apply").into());
         cx.notify();
     }
 
@@ -756,7 +757,7 @@ impl TerminalApp {
         self.draft = self.settings.clone();
         self.preferences = None;
         self.shortcut_capture = None;
-        self.status = Some("저장하지 않은 변경 내용을 취소했습니다.".into());
+        self.status = Some(crate::i18n::tr("unsaved_changes_discarded").into());
         cx.notify();
     }
 
@@ -775,7 +776,12 @@ impl TerminalApp {
         }
         match self.draft.save(&self.dir) {
             Ok(()) => {
+                let language_changed = self.settings.language != self.draft.language;
                 self.settings = self.draft.clone();
+                crate::i18n::set_language(&self.settings.language);
+                if language_changed {
+                    self.preferences = None;
+                }
                 self.shortcut_bindings =
                     Bindings::new(&self.settings.keybindings).expect("validated settings");
                 self.shortcut_capture = None;
@@ -787,7 +793,7 @@ impl TerminalApp {
                         t.update(cx, |t, cx| t.apply_settings(&self.settings, cx));
                     }
                 }
-                self.status = Some("설정을 저장했습니다.".into());
+                self.status = Some(crate::i18n::tr("settings_saved").into());
             }
             Err(e) => self.status = Some(format!("{e:#}")),
         }
@@ -796,6 +802,7 @@ impl TerminalApp {
     fn reload_settings(&mut self, cx: &mut Context<Self>) {
         match Settings::load(&self.dir) {
             Ok(settings) => {
+                crate::i18n::set_language(&settings.language);
                 cx.set_global(windows::SharedSettings(settings.clone()));
                 self.settings = settings.clone();
                 self.draft = settings;
@@ -810,7 +817,7 @@ impl TerminalApp {
                     }
                 }
                 self.config_error = false;
-                self.status = Some("설정을 다시 불러왔습니다.".into());
+                self.status = Some(crate::i18n::tr("settings_reloaded").into());
             }
             Err(e) => {
                 self.config_error = true;
@@ -1017,8 +1024,8 @@ impl TerminalApp {
                 bar.child(
                     div()
                         .id("elevation-shield")
-                        .aria_label("관리자 권한으로 실행 중")
-                        .tooltip(tip("관리자 권한으로 실행 중".into()))
+                        .aria_label(crate::i18n::tr("running_as_administrator"))
+                        .tooltip(tip(crate::i18n::tr("running_as_administrator").into()))
                         .flex()
                         .items_center()
                         .justify_center()
@@ -1111,38 +1118,31 @@ impl TerminalApp {
                     }),
             )
             .child(
-                icon_button("new-tab", Icon::Plus, "새 탭", theme)
+                icon_button("new-tab", Icon::Plus, crate::i18n::tr("new_tab"), theme)
                     .cursor_default()
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
-                    .tooltip(tip(format!(
-                        "새 탭 · {}",
-                        self.shortcut_label(keybindings::Action::NewTab)
-                    )))
+                    .tooltip(tip(crate::tf!("new_tab_arg0", arg0 => self.shortcut_label(keybindings::Action::NewTab))))
                     .on_click(cx.listener(|this, _, window, cx| this.new_default(window, cx))),
             )
             .child(
-                icon_button("profiles", Icon::ChevronDown, "프로필 및 설정", theme)
+                icon_button("profiles", Icon::ChevronDown, crate::i18n::tr("profiles_and_settings"), theme)
                     .relative()
                     .when(self.has_update(cx), |button| {
                         button
-                            .aria_label("프로필 및 설정 · 업데이트 있음")
+                            .aria_label(crate::i18n::tr("profiles_and_settings_update_available"))
                             .child(update_dot(theme).absolute().top(px(5.)).right(px(5.)))
                     })
                     .cursor_default()
                     .w(px(36.))
                     .h_full()
                     .bg(theme.bar)
-                    .tooltip(tip(format!(
-                        "프로필 및 설정{} · {}",
-                        if self.has_update(cx) {
-                            " · 업데이트 있음"
+                    .tooltip(tip(crate::tf!("profiles_and_settings_arg0_arg1", arg0 => if self.has_update(cx) {
+                            crate::i18n::tr("update_available")
                         } else {
                             ""
-                        },
-                        self.shortcut_label(keybindings::Action::ProfileMenu)
-                    )))
+                        }, arg1 => self.shortcut_label(keybindings::Action::ProfileMenu))))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.menu = !this.menu;
                         this.menu_index = 0;
@@ -1290,13 +1290,13 @@ impl TerminalApp {
                     })
                     .hover(|s| s.bg(theme.hover))
                     .child(icon(Icon::Settings, 16.))
-                    .child(div().flex_1().child("설정"))
+                    .child(div().flex_1().child(crate::i18n::tr("settings")))
                     .when(self.has_update(cx), |row| {
                         row.child(
                             div()
                                 .text_size(px(11.))
                                 .text_color(theme.accent)
-                                .child("업데이트"),
+                                .child(crate::i18n::tr("updates")),
                         )
                     })
                     .child(
@@ -1336,8 +1336,12 @@ impl TerminalApp {
     fn download_update(&mut self, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         if cx.global::<updates::Checks>().preview {
-            self.status =
-                Some("업데이트 UI 미리보기입니다. 실제 다운로드·설치는 실행하지 않습니다.".into());
+            self.status = Some(
+                crate::i18n::tr(
+                    "update_ui_preview_downloads_and_installation_are_disabled_in_this_prev",
+                )
+                .into(),
+            );
             cx.notify();
             return;
         }
@@ -1375,14 +1379,16 @@ impl TerminalApp {
     fn update_view(&self, theme: Theme, cx: &mut Context<Self>) -> AnyElement {
         use crate::update::State;
         let label: String = match &self.update_state {
-            State::Unchecked => "GitHub Releases에서 새 버전을 확인합니다.".into(),
-            State::Checking => "업데이트 확인 중…".into(),
-            State::Current => "최신 버전입니다.".into(),
-            State::NoRelease => "게시된 릴리스가 없습니다.".into(),
-            State::Available(release) => format!("{} 버전 사용 가능", release.version),
-            State::Installing => "업데이트 다운로드 및 검증 중…".into(),
-            State::Ready => "준비 완료. 다시 시작하면 현재 셸이 종료됩니다.".into(),
-            State::Failed(error) => format!("업데이트 실패: {error}"),
+            State::Unchecked => crate::i18n::tr("check_github_releases_for_a_new_version").into(),
+            State::Checking => crate::i18n::tr("checking_for_updates").into(),
+            State::Current => crate::i18n::tr("you_are_up_to_date").into(),
+            State::NoRelease => crate::i18n::tr("no_releases_have_been_published").into(),
+            State::Available(release) => {
+                crate::tf!("version_arg0_is_available", arg0 => release.version)
+            }
+            State::Installing => crate::i18n::tr("downloading_and_verifying_update").into(),
+            State::Ready => crate::i18n::tr("ready_restarting_will_close_running_shells").into(),
+            State::Failed(error) => crate::tf!("update_failed_error", error => error),
         };
         let mut row = div()
             .flex()
@@ -1412,24 +1418,31 @@ impl TerminalApp {
             );
         if !self.update_state.is_busy() {
             row = row.child(
-                settings_button("check-update", "업데이트 확인", theme)
+                settings_button("check-update", crate::i18n::tr("check_for_updates"), theme)
                     .on_click(cx.listener(|this, _, _, cx| this.check_update(cx))),
             );
         }
         #[cfg(windows)]
         if matches!(self.update_state, State::Available(_)) {
             row = row.child(
-                primary_settings_button("download-update", "업데이트 다운로드", theme)
-                    .on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
+                primary_settings_button(
+                    "download-update",
+                    crate::i18n::tr("download_update"),
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, _, cx| this.download_update(cx))),
             );
         } else if matches!(self.update_state, State::Ready) {
             row = row.child(
-                primary_settings_button("apply-update", "다시 시작하여 업데이트", theme).on_click(
-                    cx.listener(|this, _, window, cx| {
-                        this.apply_update = true;
-                        this.should_close(window, cx);
-                    }),
-                ),
+                primary_settings_button(
+                    "apply-update",
+                    crate::i18n::tr("restart_to_update"),
+                    theme,
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.apply_update = true;
+                    this.should_close(window, cx);
+                })),
             );
         }
         row.into_any_element()
@@ -1585,19 +1598,19 @@ fn window_controls(window: &Window, theme: Theme) -> AnyElement {
             "minimize",
             WindowControlArea::Min,
             "\u{e921}",
-            "최소화",
+            crate::i18n::tr("minimize"),
         ))
         .child(button(
             "maximize",
             WindowControlArea::Max,
             if maximized { "\u{e923}" } else { "\u{e922}" },
-            "최대화 또는 복원",
+            crate::i18n::tr("maximize_or_restore"),
         ))
         .child(button(
             "close",
             WindowControlArea::Close,
             "\u{e8bb}",
-            "닫기",
+            crate::i18n::tr("close"),
         ))
         .into_any_element()
 }
@@ -1627,37 +1640,47 @@ impl Render for TerminalApp {
             .child(self.tabs_view(window, cx))
             .child(content);
         if let Some(status) = &self.status {
-            root = root.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_3()
-                    .py_2()
-                    .bg(theme.panel)
-                    .border_t_1()
-                    .border_color(theme.border)
-                    .text_size(px(12.))
-                    .child(div().flex_1().child(status.clone()))
-                    .when(self.config_error, |d| {
-                        d.child(button("repair-config", "설정", theme).px_2().on_click(
-                            cx.listener(|this, _, window, cx| this.settings_tab(window, cx)),
-                        ))
-                    })
-                    .child(
-                        icon_button("dismiss-status", Icon::Close, "알림 닫기", theme)
+            root =
+                root.child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_3()
+                        .px_3()
+                        .py_2()
+                        .bg(theme.panel)
+                        .border_t_1()
+                        .border_color(theme.border)
+                        .text_size(px(12.))
+                        .child(div().flex_1().child(status.clone()))
+                        .when(self.config_error, |d| {
+                            d.child(
+                                button("repair-config", crate::i18n::tr("settings"), theme)
+                                    .px_2()
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.settings_tab(window, cx)
+                                    })),
+                            )
+                        })
+                        .child(
+                            icon_button(
+                                "dismiss-status",
+                                Icon::Close,
+                                crate::i18n::tr("dismiss_notification"),
+                                theme,
+                            )
                             .size(px(22.))
                             .on_click(cx.listener(|this, _, _, cx| {
                                 this.status = None;
                                 cx.notify();
                             })),
-                    ),
-            );
+                        ),
+                );
         }
         if self.search_visible {
             let result = self
                 .active_terminal()
-                .map(|t| t.read(cx).search_result.clone())
+                .map(|t| crate::i18n::tr(t.read(cx).search_result))
                 .unwrap_or_default();
             root = root.child(
                 div()
@@ -1682,21 +1705,34 @@ impl Render for TerminalApp {
                             .child(result),
                     )
                     .child(
-                        icon_button("find-prev", Icon::ArrowUp, "이전 검색 결과", theme)
-                            .size(px(26.))
-                            .on_click(cx.listener(|this, _, _, cx| this.find(true, true, cx))),
+                        icon_button(
+                            "find-prev",
+                            Icon::ArrowUp,
+                            crate::i18n::tr("previous_search_result"),
+                            theme,
+                        )
+                        .size(px(26.))
+                        .on_click(cx.listener(|this, _, _, cx| this.find(true, true, cx))),
                     )
                     .child(
-                        icon_button("find-next", Icon::ArrowDown, "다음 검색 결과", theme)
-                            .size(px(26.))
-                            .on_click(cx.listener(|this, _, _, cx| this.find(false, true, cx))),
+                        icon_button(
+                            "find-next",
+                            Icon::ArrowDown,
+                            crate::i18n::tr("next_search_result"),
+                            theme,
+                        )
+                        .size(px(26.))
+                        .on_click(cx.listener(|this, _, _, cx| this.find(false, true, cx))),
                     )
                     .child(
-                        icon_button("close-search", Icon::Close, "검색 닫기", theme)
-                            .size(px(26.))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.hide_search(window, cx)),
-                            ),
+                        icon_button(
+                            "close-search",
+                            Icon::Close,
+                            crate::i18n::tr("close_search"),
+                            theme,
+                        )
+                        .size(px(26.))
+                        .on_click(cx.listener(|this, _, window, cx| this.hide_search(window, cx))),
                     ),
             );
         }
@@ -1731,11 +1767,11 @@ impl Render for TerminalApp {
             let closing = self.closing;
             root = root.child(div().absolute().inset_0().flex().items_center().justify_center().bg(theme.overlay)
                 .child(div().flex().flex_col().gap_4().w(px(420.)).p_6().rounded_lg().bg(theme.panel).border_1().border_color(theme.border).shadow_lg()
-                    .child(div().text_size(px(18.)).font_weight(FontWeight::BOLD).child(if closing { "터미널 종료 중…" } else { "열린 터미널을 종료할까요?" }))
-                    .child(if closing { "셸과 터미널 연결을 정리하고 있습니다." } else if self.apply_update { "업데이트를 위해 모든 창의 명령을 종료합니다. 다시 시작하면 창과 탭을 복원합니다." } else { "실행 중인 명령이 함께 종료됩니다. 다음 실행 시 셸은 새로 시작됩니다." })
+                    .child(div().text_size(px(18.)).font_weight(FontWeight::BOLD).child(if closing { crate::i18n::tr("closing_terminals") } else { crate::i18n::tr("close_open_terminals") }))
+                    .child(if closing { crate::i18n::tr("cleaning_up_shells_and_terminal_connections") } else if self.apply_update { crate::i18n::tr("commands_in_all_windows_will_stop_for_the_update_windows_and_tabs_will") } else { crate::i18n::tr("running_commands_will_also_stop_shells_will_start_fresh_on_the_next_la") })
                     .when(!closing, |d| d.child(div().flex().justify_end().gap_2()
-                        .child(button("cancel-close", "취소", theme).px_4().py_2().on_click(cx.listener(|this, _, window, cx| { this.confirm = false; this.apply_update = false; this.restore_focus(window, cx); cx.notify(); })))
-                        .child(button("confirm-close", "모두 종료", theme).px_4().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, window, cx| this.close_window(window, cx))))))));
+                        .child(button("cancel-close", crate::i18n::tr("cancel"), theme).px_4().py_2().on_click(cx.listener(|this, _, window, cx| { this.confirm = false; this.apply_update = false; this.restore_focus(window, cx); cx.notify(); })))
+                        .child(button("confirm-close", crate::i18n::tr("close_all"), theme).px_4().py_2().bg(theme.accent).text_color(theme.bg).on_click(cx.listener(|this, _, window, cx| this.close_window(window, cx))))))));
         }
         root
     }
@@ -1922,27 +1958,30 @@ pub fn run(launch_options: crate::cli::Options) {
         Ok(s) => (s, None),
         Err(e) => (
             Settings::default(),
-            Some(format!(
-                "설정 파일을 보존하고 기본 설정으로 시작합니다. {e:#}"
-            )),
+            Some(
+                crate::tf!("starting_with_defaults_while_preserving_the_settings_file_e", e => format!("{:#}", e)),
+            ),
         ),
     };
     #[cfg(debug_assertions)]
-    let settings = if smoke_mode.is_some() {
+    let settings = if smoke_mode.as_deref().is_some_and(|mode| mode != "readme") {
         Settings::default()
     } else {
         settings
     };
+    crate::i18n::set_language(&settings.language);
     let initialize_profiles = error.is_none();
     let saved = match SavedSession::load(&dir) {
         Ok(s) => s,
         Err(e) => {
-            error.get_or_insert_with(|| format!("이전 세션을 읽지 못했습니다: {e:#}"));
+            error.get_or_insert_with(
+                || crate::tf!("failed_to_read_previous_session_e", e => format!("{:#}", e)),
+            );
             SavedSession::default()
         }
     };
     #[cfg(debug_assertions)]
-    let saved = if smoke_mode.is_some() {
+    let saved = if smoke_mode.as_deref().is_some_and(|mode| mode != "readme") {
         SavedSession::default()
     } else {
         saved
@@ -1970,7 +2009,7 @@ pub fn run(launch_options: crate::cli::Options) {
             let profile_error = if initialize_profiles {
                 platform::initialize_profiles(&mut startup_settings, &startup_directory)
                     .err()
-                    .map(|error| format!("프로필 검색 결과를 저장하지 못했습니다: {error:#}"))
+                    .map(|error| crate::tf!("failed_to_save_discovered_profiles_error", error => format!("{:#}", error)))
             } else {
                 None
             };
@@ -1983,7 +2022,7 @@ pub fn run(launch_options: crate::cli::Options) {
                         .iter()
                         .find(|profile| &profile.id == id)
                         .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("프로필을 찾을 수 없습니다: {id}"))
+                        .ok_or_else(|| anyhow::anyhow!(crate::tf!("profile_not_found_id", id => id)))
                 })
                 .transpose()?;
             #[cfg(windows)]
@@ -2012,7 +2051,9 @@ pub fn run(launch_options: crate::cli::Options) {
     let bootstrap = match bootstrap {
         Ok(bootstrap) => bootstrap,
         Err(error) => {
-            platform::show_startup_error(&format!("시작 작업을 만들지 못했습니다: {error}"));
+            platform::show_startup_error(
+                &crate::tf!("failed_to_create_startup_task_error", error => error),
+            );
             std::process::exit(2);
         }
     };
@@ -2026,7 +2067,7 @@ pub fn run(launch_options: crate::cli::Options) {
                 result => {
                     let error = match result {
                         Ok(Err(error)) => format!("{error:#}"),
-                        Err(_) => "시작 작업이 종료되었습니다.".into(),
+                        Err(_) => crate::i18n::tr("the_startup_task_ended").into(),
                         _ => unreachable!(),
                     };
                     platform::show_startup_error(&error);
@@ -2114,7 +2155,7 @@ pub fn run(launch_options: crate::cli::Options) {
                         );
                     }
                     Err(error) => {
-                        eprintln!("창을 열지 못했습니다: {error:#}");
+                        eprintln!("{}", crate::tf!("failed_to_open_window_error", error => format!("{:#}", error)));
                     }
                 }
             }
