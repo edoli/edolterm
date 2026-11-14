@@ -252,6 +252,7 @@ mod tests {
             sync::atomic::Ordering,
             time::{Duration, Instant},
         };
+        use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
         let script = r#"[Console]::WriteLine('KEYS_READY'); for ($i = 0; $i -lt 8; $i++) { $k = [Console]::ReadKey($true); [Console]::WriteLine(('KEY_{0}:{1}:{2}:{3}' -f $i, [int]$k.Key, [int]$k.KeyChar, [int]$k.Modifiers)) }; Start-Sleep -Seconds 20"#;
         let profile = Profile::new(
@@ -261,6 +262,12 @@ mod tests {
             &["-NoLogo", "-NoProfile", "-Command", script],
         );
         let (session, events) = Session::start(profile, None, &Settings::default(), 0).unwrap();
+        // A recent desktop Windows can pass this test with the system ConPTY,
+        // hiding a missing bundled runtime until it runs on Windows Server CI.
+        assert!(
+            !unsafe { GetModuleHandleW(windows_sys::w!("conpty.dll")) }.is_null(),
+            "ConPTY tests must load the bundled conpty.dll"
+        );
         let wait_for = |marker: &str| {
             let start = Instant::now();
             loop {

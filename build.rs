@@ -5,9 +5,13 @@ use std::{
 };
 
 fn bundle_windows_runtime(out_dir: &Path) {
-    // OUT_DIR is <target>/<profile>/build/<package>/out, including custom
-    // target directories and cross-compilation's extra target-triple component.
-    let profile_dir = out_dir.ancestors().nth(3).expect("Cargo profile directory");
+    // Cargo 1.100 uses build/<package>/<hash>/out; older versions use
+    // build/<package>-<hash>/out. Find the profile without counting parents.
+    let profile_dir = out_dir
+        .ancestors()
+        .find(|directory| directory.file_name().is_some_and(|name| name == "build"))
+        .and_then(Path::parent)
+        .expect("Cargo profile directory");
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let script = manifest_dir.join("scripts/bundle-windows.ps1");
     let architecture = match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
@@ -51,8 +55,11 @@ fn bundle_windows_runtime(out_dir: &Path) {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Tests and examples load DLLs relative to their own executable, too.
+    // Cargo 1.100 runs tests in per-unit build directories. Expose our own
+    // OUT_DIR through Cargo's DLL search path instead of guessing their paths.
+    // Keep adjacent copies for standalone binaries and older Cargo versions.
     for directory in [
+        out_dir.to_path_buf(),
         profile_dir.to_path_buf(),
         profile_dir.join("deps"),
         profile_dir.join("examples"),
@@ -74,6 +81,7 @@ fn bundle_windows_runtime(out_dir: &Path) {
             println!("cargo:rerun-if-changed={}", destination.display());
         }
     }
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
 }
 
 fn main() {
