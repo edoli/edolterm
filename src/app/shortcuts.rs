@@ -88,16 +88,9 @@ impl TerminalApp {
                 let handled = terminal.update(cx, |view, cx| {
                     match action {
                         Action::Copy => {
-                            let selected = view.session.as_ref().is_some_and(|s| {
-                                s.terminal
-                                    .lock()
-                                    .selection_to_string()
-                                    .is_some_and(|text| !text.is_empty())
-                            });
-                            if !selected {
+                            if !view.copy(cx) {
                                 return false;
                             }
-                            view.copy(cx);
                             if let Some(s) = &view.session {
                                 s.terminal.lock().selection = None;
                             }

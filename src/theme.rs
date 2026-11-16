@@ -223,7 +223,7 @@ impl Theme {
 pub struct TerminalTheme {
     pub bg: Hsla,
     pub fg: Hsla,
-    pub selection: Hsla,
+    pub selection: SurfaceColors,
     pub search_match: SurfaceColors,
     pub dim_opacity: f32,
     scheme: &'static crate::config::color_schemes::ColorScheme,
@@ -241,7 +241,10 @@ impl TerminalTheme {
         Self {
             bg: rgb(scheme.background).into(),
             fg: rgb(scheme.foreground).into(),
-            selection: Hsla::from(rgb(scheme.selection)).opacity(0.4),
+            selection: SurfaceColors {
+                bg: rgb(scheme.selection).into(),
+                fg: contrasting_text(rgb(scheme.selection).into()),
+            },
             search_match: SurfaceColors {
                 bg: rgb(0x886629).into(),
                 fg: rgb(0xffffff).into(),
@@ -316,6 +319,21 @@ mod tests {
 
     fn packed(rgb: Rgb) -> u32 {
         (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
+    }
+
+    #[test]
+    fn selection_is_opaque_and_readable_in_every_scheme() {
+        for scheme in COLOR_SCHEMES {
+            let selection = TerminalTheme::from_scheme(scheme.name).selection;
+            assert_eq!(selection.bg.a, 1., "{}", scheme.name);
+            assert_eq!(selection.fg.a, 1., "{}", scheme.name);
+            assert_ne!(selection.bg, selection.fg, "{}", scheme.name);
+        }
+        let default = TerminalTheme::default().selection;
+        assert_eq!(default.bg, Hsla::from(rgb(0xffffff)));
+        assert_eq!(default.fg, Hsla::from(rgb(0x000000)));
+        let light = TerminalTheme::from_scheme("One Half Light").selection;
+        assert_eq!(light.fg, Hsla::from(rgb(0xffffff)));
     }
 
     #[test]

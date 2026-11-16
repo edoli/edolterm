@@ -30,7 +30,7 @@ pub fn directory(mode: &str) -> PathBuf {
     let mode = match mode {
         "single" | "terminal" | "menu" | "settings" | "overflow" | "find" | "confirm"
         | "scroll" | "drop" | "tabs" | "instances" | "keys" | "shortcuts" | "layout" | "links"
-        | "updates" | "updates-preview" | "readme" => mode,
+        | "selection" | "updates" | "updates-preview" | "readme" => mode,
         _ => "terminal",
     };
     std::env::current_dir()
@@ -357,6 +357,30 @@ pub fn start(
                 Ok(())
             });
             if let Err(e) = result.and_then(|r| r) {
+                let _ = root.read_with(cx, |app, _| config::atomic_write(&app.dir.join("result.json"), serde_json::to_string_pretty(&serde_json::json!({"passed": false, "error": format!("{e:#}")})).unwrap().as_bytes()));
+            }
+        }
+        #[cfg(feature = "ui-tests")]
+        if mode == "selection" {
+            let clipboard = cx.update(|cx| cx.read_from_clipboard());
+            let result = handle.update(cx, |_, window, cx| {
+                let terminal = root.read(cx).active_terminal().unwrap();
+                let directory = root.read(cx).dir.clone();
+                TerminalView::selection_probe(&terminal, &directory, window, cx)
+            });
+            let mut result = result.and_then(|r| r);
+            let began = Instant::now();
+            while result.is_ok() {
+                let pasted = root.read_with(cx, |app, cx| app.active_terminal().unwrap().read(cx).session.as_ref().unwrap().plain_text().contains("RIGHT_CLICK_PASTE_한글_OK"));
+                if pasted { break; }
+                if began.elapsed() > Duration::from_secs(10) {
+                    result = Err(anyhow::anyhow!("right-click without selection did not paste into the PTY"));
+                    break;
+                }
+                cx.background_executor().timer(Duration::from_millis(50)).await;
+            }
+            let _ = cx.update(|cx| cx.write_to_clipboard(clipboard.unwrap_or_else(|| ClipboardItem::new_string(String::new()))));
+            if let Err(e) = result {
                 let _ = root.read_with(cx, |app, _| config::atomic_write(&app.dir.join("result.json"), serde_json::to_string_pretty(&serde_json::json!({"passed": false, "error": format!("{e:#}")})).unwrap().as_bytes()));
             }
         }

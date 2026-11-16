@@ -21,6 +21,8 @@ mod file_drop;
 mod layout;
 mod links;
 mod scroll;
+#[cfg(all(feature = "ui-tests", debug_assertions))]
+mod selection;
 mod title;
 use scroll::{ScrollLines, ScrollZoom};
 
@@ -562,12 +564,20 @@ impl TerminalView {
         cx.notify();
     }
 
-    pub fn copy(&mut self, cx: &mut Context<Self>) {
-        if let Some(s) = &self.session
-            && let Some(text) = s.terminal.lock().selection_to_string()
-        {
-            cx.write_to_clipboard(ClipboardItem::new_string(text));
-        }
+    pub fn copy(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(s) = &self.session else {
+            return false;
+        };
+        let Some(text) = s
+            .terminal
+            .lock()
+            .selection_to_string()
+            .filter(|text| !text.is_empty())
+        else {
+            return false;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        true
     }
 
     pub fn select_all(&mut self, cx: &mut Context<Self>) {
@@ -789,7 +799,14 @@ impl TerminalView {
             term.selection = Some(Selection::new(ty, point, side));
             self.selecting = true;
         } else if e.button == MouseButton::Right {
-            self.paste(cx);
+            if self.copy(cx) {
+                if let Some(s) = &self.session {
+                    s.terminal.lock().selection = None;
+                }
+                self.selecting = false;
+            } else {
+                self.paste(cx);
+            }
         }
         cx.stop_propagation();
         cx.notify();
@@ -1020,15 +1037,17 @@ impl TerminalView {
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
-            if selection.is_some_and(|s| s.contains(p)) {
-                bg = theme.terminal.selection;
-            }
             if self.search_match.as_ref().is_some_and(|r| r.contains(&p)) {
                 bg = theme.terminal.search_match.bg;
                 fg = theme.terminal.search_match.fg;
             }
             if cell.flags.contains(Flags::DIM) {
                 fg = fg.opacity(theme.terminal.dim_opacity);
+            }
+            // Selection stays legible over ANSI colors, dim text and search matches.
+            if selection.is_some_and(|s| s.contains(p)) {
+                bg = theme.terminal.selection.bg;
+                fg = theme.terminal.selection.fg;
             }
             let rect = Bounds::new(pos, gpui::size(px(self.cell_width), px(self.cell_height)));
             if bg != theme.terminal.bg {
