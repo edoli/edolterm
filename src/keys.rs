@@ -115,20 +115,42 @@ pub fn encode(key: &Keystroke, mode: TermMode) -> Option<Vec<u8>> {
     })
 }
 
-/// Enter key events in Microsoft's negotiated win32-input-mode (DECSET 9001).
-/// Use this for Enter to preserve Shift/Ctrl instead of being reduced to a CR
-/// or LF by ConPTY. Unicode/IME text stays on GPUI's existing input path.
-pub fn win32_enter(key: &Keystroke, down: bool) -> Option<Vec<u8>> {
-    if key.key != "enter" {
-        return None;
+/// Keys that need Microsoft's negotiated win32-input-mode (DECSET 9001).
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+pub(crate) enum Win32Key {
+    Enter,
+    Escape,
+}
+
+impl Win32Key {
+    pub(crate) fn from_keystroke(key: &Keystroke) -> Option<Self> {
+        match key.key.as_str() {
+            "enter" => Some(Self::Enter),
+            "escape" => Some(Self::Escape),
+            _ => None,
+        }
     }
-    let m = key.modifiers;
-    // GPUI does not distinguish left/right modifiers. Use the left-hand flags:
-    // LEFT_ALT_PRESSED=2, LEFT_CTRL_PRESSED=8, SHIFT_PRESSED=16.
-    let state = 2 * u8::from(m.alt) + 8 * u8::from(m.control) + 16 * u8::from(m.shift);
-    let character = if m.control { 10 } else { 13 };
-    // CSI Vk;Sc;Uc;Kd;Cs;Rc _ -- VK_RETURN=13, scan code=28.
-    Some(format!("\x1b[13;28;{character};{};{state};1_", u8::from(down)).into_bytes())
+
+    pub(crate) fn encode(self, modifiers: gpui::Modifiers, down: bool) -> Vec<u8> {
+        let (virtual_key, scan_code, character) = match self {
+            // Preserve Enter's modifiers alongside its CR or LF character.
+            Self::Enter => (13, 28, if modifiers.control { 10 } else { 13 }),
+            // After seeing Win32 key events, ConPTY buffers a lone ESC as
+            // the possible start of a sequence.
+            Self::Escape => (27, 1, 27),
+        };
+        // GPUI does not distinguish left/right modifiers. Use the left-hand flags:
+        // LEFT_ALT_PRESSED=2, LEFT_CTRL_PRESSED=8, SHIFT_PRESSED=16.
+        let state = 2 * u8::from(modifiers.alt)
+            + 8 * u8::from(modifiers.control)
+            + 16 * u8::from(modifiers.shift);
+        // CSI Vk;Sc;Uc;Kd;Cs;Rc _
+        format!(
+            "\x1b[{virtual_key};{scan_code};{character};{};{state};1_",
+            u8::from(down)
+        )
+        .into_bytes()
+    }
 }
 
 pub fn paste(text: &str, bracketed: bool) -> Vec<u8> {
@@ -189,6 +211,7 @@ mod tests {
     #[test]
     fn control_navigation_and_unicode_ownership() {
         assert_eq!(encode(&key("ctrl-c"), TermMode::empty()).unwrap(), [3]);
+        assert_eq!(encode(&key("escape"), TermMode::empty()).unwrap(), b"\x1b");
         assert_eq!(encode(&key("up"), TermMode::APP_CURSOR).unwrap(), b"\x1bOA");
         assert_eq!(
             encode(&key("ctrl-left"), TermMode::empty()).unwrap(),
@@ -220,29 +243,33 @@ mod tests {
     }
 
     #[test]
-    fn win32_enter_preserves_modifiers_and_key_releases() {
-        for (name, character, state) in [
-            ("enter", 13, 0),
-            ("shift-enter", 13, 16),
-            ("ctrl-enter", 10, 8),
-            ("ctrl-shift-enter", 10, 24),
-            ("alt-enter", 13, 2),
-            ("ctrl-alt-shift-enter", 10, 26),
+    fn win32_keys_preserve_modifiers_and_key_releases() {
+        for (name, code, state) in [
+            ("enter", "13;28;13", 0),
+            ("shift-enter", "13;28;13", 16),
+            ("ctrl-enter", "13;28;10", 8),
+            ("ctrl-shift-enter", "13;28;10", 24),
+            ("alt-enter", "13;28;13", 2),
+            ("ctrl-alt-shift-enter", "13;28;10", 26),
+            ("escape", "27;1;27", 0),
+            ("shift-escape", "27;1;27", 16),
         ] {
+            let key = key(name);
+            let win32_key = Win32Key::from_keystroke(&key).unwrap();
             for down in [true, false] {
                 assert_eq!(
-                    win32_enter(&key(name), down).unwrap(),
-                    format!("\x1b[13;28;{character};{};{state};1_", u8::from(down)).as_bytes(),
+                    win32_key.encode(key.modifiers, down),
+                    format!("\x1b[{code};{};{state};1_", u8::from(down)).as_bytes(),
                     "{name}, down={down}"
                 );
             }
         }
-        assert!(win32_enter(&key("a"), true).is_none());
+        assert!(Win32Key::from_keystroke(&key("a")).is_none());
     }
 
     #[cfg(windows)]
     #[test]
-    fn conpty_delivers_enter_modifiers_to_windows_console_apps() {
+    fn conpty_delivers_enter_and_escape_to_windows_console_apps() {
         use crate::{
             config::{Profile, Settings},
             session::Session,
@@ -254,7 +281,7 @@ mod tests {
         };
         use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
-        let script = r#"[Console]::WriteLine('KEYS_READY'); for ($i = 0; $i -lt 8; $i++) { $k = [Console]::ReadKey($true); [Console]::WriteLine(('KEY_{0}:{1}:{2}:{3}' -f $i, [int]$k.Key, [int]$k.KeyChar, [int]$k.Modifiers)) }; Start-Sleep -Seconds 20"#;
+        let script = r#"[Console]::WriteLine('KEYS_READY'); for ($i = 0; $i -lt 10; $i++) { $k = [Console]::ReadKey($true); [Console]::WriteLine(('KEY_{0}:{1}:{2}:{3}' -f $i, [int]$k.Key, [int]$k.KeyChar, [int]$k.Modifiers)) }; Start-Sleep -Seconds 20"#;
         let profile = Profile::new(
             "keys",
             "keys",
@@ -294,22 +321,26 @@ mod tests {
             session.win32_input_mode(),
             "ConPTY must negotiate DECSET 9001"
         );
-        for (i, (name, character, modifiers)) in [
-            ("enter", 13, 0),
-            ("shift-enter", 13, 2),
-            ("ctrl-enter", 10, 4),
-            ("ctrl-shift-enter", 10, 6),
-            ("alt-enter", 13, 1),
-            ("alt-shift-enter", 13, 3),
-            ("ctrl-alt-enter", 10, 5),
-            ("ctrl-alt-shift-enter", 10, 7),
+        for (i, (name, virtual_key, character, modifiers)) in [
+            ("enter", 13, 13, 0),
+            ("shift-enter", 13, 13, 2),
+            ("ctrl-enter", 13, 10, 4),
+            ("ctrl-shift-enter", 13, 10, 6),
+            ("alt-enter", 13, 13, 1),
+            ("alt-shift-enter", 13, 13, 3),
+            ("ctrl-alt-enter", 13, 10, 5),
+            ("ctrl-alt-shift-enter", 13, 10, 7),
+            ("escape", 27, 27, 0),
+            ("shift-escape", 27, 27, 2),
         ]
         .into_iter()
         .enumerate()
         {
-            session.input(win32_enter(&key(name), true).unwrap());
-            session.write(win32_enter(&key(name), false).unwrap());
-            wait_for(&format!("KEY_{i}:13:{character}:{modifiers}"));
+            let key = key(name);
+            let win32_key = Win32Key::from_keystroke(&key).unwrap();
+            session.input(win32_key.encode(key.modifiers, true));
+            session.write(win32_key.encode(key.modifiers, false));
+            wait_for(&format!("KEY_{i}:{virtual_key}:{character}:{modifiers}"));
         }
         session.shutdown();
         let start = Instant::now();

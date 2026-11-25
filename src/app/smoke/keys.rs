@@ -1,4 +1,4 @@
-//! Check Enter chords through GPUI's dispatch tree and the real PowerShell PTY.
+//! Check Enter chords and Escape through GPUI's dispatch tree and the real PowerShell PTY.
 use super::*;
 use anyhow::{Result, ensure};
 
@@ -52,20 +52,26 @@ pub(super) async fn run(
         let terminal = root.read(cx).active_terminal().unwrap();
         let focus = terminal.read(cx).focus.clone();
         focus.focus(window, cx);
-        terminal.read(cx).session.as_ref().unwrap().input(b"[Console]::WriteLine(('KEYS_'+'READY')); for ($i = 0; $i -lt 4; $i++) { $k = [Console]::ReadKey($true); [Console]::WriteLine(('UIKEY_{0}:{1}:{2}:{3}' -f $i, [int]$k.Key, [int]$k.KeyChar, [int]$k.Modifiers)) }; [Console]::WriteLine(('KEYS_'+'DONE'))\r".to_vec());
+        terminal.read(cx).session.as_ref().unwrap().input(b"[Console]::WriteLine(('KEYS_'+'READY')); for ($i = 0; $i -lt 5; $i++) { $k = [Console]::ReadKey($true); [Console]::WriteLine(('UIKEY_{0}:{1}:{2}:{3}' -f $i, [int]$k.Key, [int]$k.KeyChar, [int]$k.Modifiers)) }; [Console]::WriteLine(('KEYS_'+'DONE'))\r".to_vec());
     })?;
     wait_for(root, "KEYS_READY", cx).await?;
-    for (i, (name, character, modifiers)) in [
-        ("enter", 13, 0),
-        ("shift-enter", 13, 2),
-        ("ctrl-enter", 10, 4),
-        ("ctrl-shift-enter", 10, 6),
+    for (i, (name, key, character, modifiers)) in [
+        ("enter", 13, 13, 0),
+        ("shift-enter", 13, 13, 2),
+        ("ctrl-enter", 13, 10, 4),
+        ("ctrl-shift-enter", 13, 10, 6),
+        ("escape", 27, 27, 0),
     ]
     .into_iter()
     .enumerate()
     {
         press(handle, name, cx)?;
-        wait_for(root, &format!("UIKEY_{i}:13:{character}:{modifiers}"), cx).await?;
+        wait_for(
+            root,
+            &format!("UIKEY_{i}:{key}:{character}:{modifiers}"),
+            cx,
+        )
+        .await?;
     }
     wait_for(root, "KEYS_DONE", cx).await?;
     cx.background_executor()

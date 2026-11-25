@@ -14,7 +14,9 @@ use alacritty_terminal::{
     vte::ansi::CursorShape,
 };
 use gpui::{prelude::*, *};
-use std::{ops::Range, path::PathBuf, sync::atomic::Ordering, time::Duration};
+use std::{
+    collections::HashSet, ops::Range, path::PathBuf, sync::atomic::Ordering, time::Duration,
+};
 use unicode_segmentation::UnicodeSegmentation;
 
 mod file_drop;
@@ -97,7 +99,7 @@ pub struct TerminalView {
     scroll_zoom: ScrollZoom,
     last_mouse: Option<(usize, usize)>,
     cursor_on: bool,
-    win32_enter_pressed: bool,
+    win32_keys_pressed: HashSet<keys::Win32Key>,
     blink: Option<Task<()>>,
     cwd: Option<PathBuf>,
     window_id: u64,
@@ -148,7 +150,7 @@ impl TerminalView {
             scroll_zoom: ScrollZoom::default(),
             last_mouse: None,
             cursor_on: true,
-            win32_enter_pressed: false,
+            win32_keys_pressed: HashSet::new(),
             blink: None,
             cwd,
             window_id: window.window_handle().window_id().as_u64(),
@@ -239,7 +241,7 @@ impl TerminalView {
         self.cursor_on = true;
         self.selecting = false;
         self.link_mouse_down = false;
-        self.win32_enter_pressed = false;
+        self.win32_keys_pressed.clear();
         self.last_mouse = None;
         self.preedit.clear();
         self.preedit_selection = 0..0;
@@ -338,7 +340,9 @@ impl TerminalView {
                                 PendingInput::KeyDown(key) => {
                                     this.input_key(&key);
                                 }
-                                PendingInput::KeyUp(key) => this.release_key(&key),
+                                PendingInput::KeyUp(key) => {
+                                    this.release_key(&key);
+                                }
                             }
                         }
                         this._receiver = Some(cx.spawn(async move |this, cx| {
@@ -439,16 +443,19 @@ impl TerminalView {
     }
 
     fn input_key(&mut self, key: &Keystroke) -> bool {
-        let mode = self
+        let win32_key = self
             .session
             .as_ref()
-            .map(|s| *s.terminal.lock().mode())
-            .unwrap_or_default();
-        let win32_enter =
-            self.session.as_ref().is_some_and(Session::win32_input_mode) && key.key == "enter";
-        let bytes = if win32_enter {
-            keys::win32_enter(key, true)
+            .filter(|session| session.win32_input_mode())
+            .and_then(|_| keys::Win32Key::from_keystroke(key));
+        let bytes = if let Some(win32_key) = win32_key {
+            Some(win32_key.encode(key.modifiers, true))
         } else {
+            let mode = self
+                .session
+                .as_ref()
+                .map(|s| *s.terminal.lock().mode())
+                .unwrap_or_default();
             keys::encode(key, mode)
         };
         let Some(bytes) = bytes else {
@@ -457,8 +464,8 @@ impl TerminalView {
         if !self.exited && self.error.is_none() {
             if let Some(session) = &self.session {
                 session.input(bytes);
-                if win32_enter {
-                    self.win32_enter_pressed = true;
+                if let Some(win32_key) = win32_key {
+                    self.win32_keys_pressed.insert(win32_key);
                 }
             } else {
                 self.pending_input.push(PendingInput::KeyDown(key.clone()));
@@ -467,22 +474,23 @@ impl TerminalView {
         true
     }
 
-    fn release_key(&mut self, key: &Keystroke) {
-        if key.key != "enter" {
-            return;
-        }
-        if self.session.is_none() && !self.exited && self.error.is_none() {
+    fn release_key(&mut self, key: &Keystroke) -> bool {
+        let Some(win32_key) = keys::Win32Key::from_keystroke(key) else {
+            return false;
+        };
+        if self.startup.is_some() {
             self.pending_input.push(PendingInput::KeyUp(key.clone()));
-        } else if self.win32_enter_pressed {
-            self.win32_enter_pressed = false;
+        } else if self.win32_keys_pressed.remove(&win32_key) {
             if let Some(session) = &self.session
                 && !self.exited
                 && session.win32_input_mode()
-                && let Some(bytes) = keys::win32_enter(key, false)
             {
-                session.write(bytes);
+                session.write(win32_key.encode(key.modifiers, false));
             }
+        } else {
+            return false;
         }
+        true
     }
 
     fn event(&mut self, event: Event, cx: &mut Context<Self>) {
@@ -707,8 +715,7 @@ impl TerminalView {
     }
 
     fn key_up(&mut self, e: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
-        if e.keystroke.key == "enter" && (self.win32_enter_pressed || self.startup.is_some()) {
-            self.release_key(&e.keystroke);
+        if self.release_key(&e.keystroke) {
             cx.stop_propagation();
         }
     }
