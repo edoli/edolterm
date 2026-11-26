@@ -8,6 +8,7 @@ mod i18n;
 mod icons;
 mod instance;
 mod keys;
+mod panic_log;
 mod platform;
 mod select;
 mod session;
@@ -18,6 +19,7 @@ mod theme;
 mod update;
 
 fn main() {
+    panic_log::install();
     i18n::set_language("system");
     platform::trace_startup("main");
     let options = match cli::Options::parse(std::env::args_os().skip(1)) {
